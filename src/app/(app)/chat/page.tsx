@@ -114,7 +114,7 @@ function ChatPageContent() {
 
       const resolvedConvos = await Promise.all(convosPromises);
       
-      // Deduplicate conversations by participants to handle legacy data and prevent "multiple chats"
+      // Deduplicate conversations by participants to fix "multiple chats" issue
       const uniqueConvosMap = new Map<string, ChatConversation>();
       resolvedConvos.forEach(convo => {
         if (!convo.participantUids || convo.participantUids.length < 2) return;
@@ -125,9 +125,9 @@ function ChatPageContent() {
         const existing = uniqueConvosMap.get(otherUid);
         const sortedPair = [...convo.participantUids].sort().join('_');
         
-        // Prioritize:
-        // 1. The deterministic ID if it matches the current document ID
-        // 2. The one with the most recent update
+        // Prioritization logic:
+        // 1. Prefer deterministic IDs (uid1_uid2)
+        // 2. If both are the same type, prefer the one with the most recent update
         const isDeterministicId = convo.id === sortedPair;
         
         if (!existing) {
@@ -151,11 +151,13 @@ function ChatPageContent() {
       setConversations(uniqueConvos);
       setIsLoadingConversations(false);
     }, (error) => {
-      const permissionError = new FirestorePermissionError({
-        path: 'conversations',
-        operation: 'list',
-      });
-      errorEmitter.emit('permission-error', permissionError);
+      if (error.code === 'permission-denied') {
+        const permissionError = new FirestorePermissionError({
+          path: 'conversations',
+          operation: 'list',
+        });
+        errorEmitter.emit('permission-error', permissionError);
+      }
       setIsLoadingConversations(false);
     });
 
@@ -177,6 +179,7 @@ function ChatPageContent() {
         const conversationDocRef = doc(db, "conversations", conversationId);
         
         try {
+            // Check for existing deterministic chat
             const docSnap = await getDoc(conversationDocRef).catch(async (error) => {
               if (error.code === 'permission-denied') {
                   const permissionError = new FirestorePermissionError({
@@ -189,26 +192,9 @@ function ChatPageContent() {
             });
             
             if (!docSnap.exists()) {
-                const otherUser = await getCachedUserDetails(newChatWithUserId);
-                if (otherUser) {
-                    const newConvoData = {
-                        participantUids: sortedUids,
-                        lastMessage: null,
-                        unreadCount: { [currentUser.uid]: 0, [newChatWithUserId]: 0 },
-                        createdAt: serverTimestamp(),
-                        updatedAt: serverTimestamp(),
-                    };
-                    await setDoc(conversationDocRef, newConvoData).catch(async (error) => {
-                        if (error.code === 'permission-denied') {
-                            const permissionError = new FirestorePermissionError({
-                                path: conversationDocRef.path,
-                                operation: 'create',
-                                requestResourceData: newConvoData,
-                            });
-                            errorEmitter.emit('permission-error', permissionError);
-                        }
-                    });
-                }
+                // If it doesn't exist, we'll create it only when the first message is sent
+                // or just navigate to it if it's already in the cache from legacy data.
+                // For now, ensure navigation happens.
             }
 
             const newParams = new URLSearchParams(searchParams.toString());
@@ -277,11 +263,13 @@ function ChatPageContent() {
           });
       }
     }, (error) => {
-      const permissionError = new FirestorePermissionError({
-        path: `conversations/${selectedChatId}/messages`,
-        operation: 'list',
-      });
-      errorEmitter.emit('permission-error', permissionError);
+      if (error.code === 'permission-denied') {
+        const permissionError = new FirestorePermissionError({
+          path: `conversations/${selectedChatId}/messages`,
+          operation: 'list',
+        });
+        errorEmitter.emit('permission-error', permissionError);
+      }
       setIsLoadingMessages(false);
     });
     
@@ -300,12 +288,17 @@ function ChatPageContent() {
     if (!currentUser?.uid || !selectedChatId) return;
 
     const currentConvo = conversations.find(c => c.id === selectedChatId);
-    if (!currentConvo) return;
+    
+    // Fallback for starting a chat that isn't yet in the list
+    const receiverUid = currentConvo 
+      ? currentConvo.participantUids.find(uid => uid !== currentUser.uid)
+      : selectedChatId.split('_').find(uid => uid !== currentUser.uid);
 
-    const receiverUid = currentConvo.participantUids.find(uid => uid !== currentUser.uid);
     if (!receiverUid) return;
     
+    const conversationDocRef = doc(db, "conversations", selectedChatId);
     const newMessageRef = doc(collection(db, "conversations", selectedChatId, "messages"));
+    
     const messageData = {
       senderId: currentUser.uid,
       receiverId: receiverUid,
@@ -314,10 +307,10 @@ function ChatPageContent() {
       isRead: false,
     };
 
-    const conversationDocRef = doc(db, "conversations", selectedChatId);
-    const currentUnreadCount = currentConvo.unreadCount?.[receiverUid] || 0;
+    const currentUnreadCount = currentConvo?.unreadCount?.[receiverUid] || 0;
     
     const conversationUpdateData: any = {
+      participantUids: currentConvo?.participantUids || [currentUser.uid, receiverUid].sort(),
       lastMessage: {
         text: messageText,
         senderId: currentUser.uid,
@@ -330,7 +323,7 @@ function ChatPageContent() {
 
     const batch = writeBatch(db);
     batch.set(newMessageRef, messageData);
-    batch.update(conversationDocRef, conversationUpdateData);
+    batch.set(conversationDocRef, conversationUpdateData, { merge: true });
 
     batch.commit().catch(async (error) => {
       if (error.code === 'permission-denied') {
