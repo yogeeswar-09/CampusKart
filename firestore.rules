@@ -25,6 +25,7 @@ service cloud.firestore {
     match /conversations/{conversationId} {
       
       // Helper to check if the current user is a participant of this conversation
+      // Safe version that handles null data (non-existent docs)
       function isMember(data) {
         return isSignedIn() && (
           // Allow if the conversation ID is the deterministic format (uid1_uid2) and user is part of it
@@ -43,9 +44,11 @@ service cloud.firestore {
       );
       
       // Allow get (single doc) if member
-      allow get: if isMember(resource.data) || 
-                   (exists(/databases/$(database)/documents/conversations/$(conversationId)) && 
-                    isMember(get(/databases/$(database)/documents/conversations/$(conversationId)).data));
+      // Safe check for resource existence to avoid evaluation errors during existence checks
+      allow get: if isSignedIn() && (
+        (request.auth.uid in conversationId.split('_')) ||
+        (resource != null && request.auth.uid in resource.data.participantUids)
+      );
 
       // Allow list (queries) if member of the document (filters on participantUids)
       allow list: if isSignedIn() && 
@@ -58,8 +61,12 @@ service cloud.firestore {
       // Messages subcollection
       match /messages/{messageId} {
         // Use get() on parent to verify membership for the messages subcollection
-        allow read: if isMember(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
-        allow create: if isMember(get(/databases/$(database)/documents/conversations/$(conversationId)).data) && 
+        function parentDoc() {
+          return get(/databases/$(database)/documents/conversations/$(conversationId));
+        }
+        allow read: if isSignedIn() && isMember(parentDoc().data);
+        allow create: if isSignedIn() && 
+                       isMember(parentDoc().data) && 
                        request.resource.data.senderId == request.auth.uid;
       }
     }

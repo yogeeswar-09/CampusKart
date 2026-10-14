@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from 'react';
@@ -99,7 +98,8 @@ export default function ListingDetailPage() {
     if (!offerPrice || isNaN(parseFloat(offerPrice)) || parseFloat(offerPrice) <= 0) return;
 
     setIsSendingOffer(true);
-    const offerMessage = `Hi! I would like to make an offer of ₹${parseFloat(offerPrice).toFixed(2)} for your item: "${listing.title}".`;
+    const offerPriceNum = parseFloat(offerPrice);
+    const offerMessage = `Hi! I would like to make an offer of ₹${offerPriceNum.toFixed(2)} for your item: "${listing.title}".`;
     const sortedUids = [currentUser.uid, seller.uid].sort();
     const conversationId = sortedUids.join('_');
     const conversationDocRef = doc(db, "conversations", conversationId);
@@ -158,12 +158,14 @@ export default function ListingDetailPage() {
           setOfferPrice('');
           router.push(`/chat?chatId=${conversationId}`);
         }).catch(async (error) => {
-          const permissionError = new FirestorePermissionError({
-            path: conversationDocRef.path,
-            operation: convoSnap.exists() ? 'update' : 'create',
-            requestResourceData: { conversationData, messageData },
-          });
-          errorEmitter.emit('permission-error', permissionError);
+          if (error.code === 'permission-denied') {
+            const permissionError = new FirestorePermissionError({
+              path: conversationDocRef.path,
+              operation: convoSnap.exists() ? 'update' : 'create',
+              requestResourceData: { conversationData, messageData },
+            });
+            errorEmitter.emit('permission-error', permissionError);
+          }
         });
 
     } catch (error: any) {
