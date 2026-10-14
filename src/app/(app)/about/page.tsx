@@ -1,7 +1,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Mail, Users, BookOpenCheck, UserCheck, Shield } from "lucide-react";
+import { Mail, BookOpenCheck, Shield } from "lucide-react";
 
 export default function AboutUsPage() {
   try {
@@ -22,32 +22,6 @@ export default function AboutUsPage() {
               <p>
                 We aim to foster a vibrant campus community bymaking it easy and safe for students to trade goods, find great deals, and declutter. By connecting students directly, CampusKart promotes sustainability and resourcefulness within our college.
               </p>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-lg">
-            <CardHeader>
-              <CardTitle className="text-2xl font-semibold text-accent flex items-center">
-                <Users className="mr-3 h-6 w-6" /> Our Team
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="text-foreground/90">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {[
-                  { name: "Yogeeswar", role: "Developer (CSM)" },
-                  { name: "Siri Chandana", role: "Developer (CSM)" },
-                  { name: "Arjun", role: "Developer (CSM)" },
-                  { name: "Vennala", role: "Developer (CSM)" },
-                ].map((member) => (
-                  <div key={member.name} className="p-3 bg-muted/50 rounded-lg flex items-center space-x-3">
-                    <UserCheck className="h-5 w-5 text-primary" />
-                    <div>
-                      <p className="font-semibold">{member.name}</p>
-                      <p className="text-sm text-muted-foreground">{member.role}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
             </CardContent>
           </Card>
 
