@@ -10,11 +10,12 @@ service cloud.firestore {
     }
 
     // Helper to check if a user is a participant of a specific conversation
+    // Handles both deterministic IDs (uid1_uid2) and legacy random IDs
     function isConversationMember(convoId) {
-      let convo = get(/databases/$(database)/documents/conversations/$(convoId));
       return isSignedIn() && (
         (request.auth.uid in convoId.split('_')) || 
-        (convo != null && request.auth.uid in convo.data.participantUids)
+        (exists(/databases/$(database)/documents/conversations/$(convoId)) && 
+         request.auth.uid in get(/databases/$(database)/documents/conversations/$(convoId)).data.participantUids)
       );
     }
 
@@ -41,10 +42,10 @@ service cloud.firestore {
         request.auth.uid in conversationId.split('_')
       );
       
-      // Allow read/update if the user is a participant
+      // Allow read/update/delete if the user is a participant
       allow read, update, delete: if isSignedIn() && (
         request.auth.uid in conversationId.split('_') ||
-        request.auth.uid in resource.data.participantUids
+        (resource != null && request.auth.uid in resource.data.participantUids)
       );
 
       // Messages subcollection
