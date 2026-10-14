@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect, Suspense, useCallback } from 'react';
@@ -16,7 +15,6 @@ import {
   where,
   orderBy,
   onSnapshot,
-  addDoc,
   updateDoc,
   doc,
   getDoc,
@@ -26,8 +24,9 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
+import { errorEmitter } from '@/firebase/error-emitter';
+import { FirestorePermissionError } from '@/firebase/errors';
 
-// Helper function to fetch user details from Firestore
 const fetchUserDetails = async (uid: string): Promise<User | null> => {
   if (!uid) return null;
   try {
@@ -36,14 +35,12 @@ const fetchUserDetails = async (uid: string): Promise<User | null> => {
     if (userDocSnap.exists()) {
       return { uid: userDocSnap.id, ...userDocSnap.data() } as User;
     }
-    console.warn(`User details not found for UID: ${uid}`);
     return null;
   } catch (error) {
     console.error("Error fetching user details:", error);
     return null;
   }
 };
-
 
 function ChatPageContent() {
   const { user: currentUser, isLoading: authLoading } = useAuth();
@@ -60,7 +57,6 @@ function ChatPageContent() {
   const [otherParticipantDetails, setOtherParticipantDetails] = useState<User | null>(null);
   const [userCache, setUserCache] = useState<Map<string, User>>(new Map());
 
-  // Cached user detail fetcher
   const getCachedUserDetails = useCallback(async (uid: string): Promise<User | null> => {
     if (userCache.has(uid)) {
       return userCache.get(uid)!;
@@ -72,14 +68,11 @@ function ChatPageContent() {
     return user;
   }, [userCache]);
 
-  // Effect 1: Fetch conversations for the current user
   useEffect(() => {
     if (!currentUser?.uid) {
       if (!authLoading) setIsLoadingConversations(false);
       return;
     }
-    console.log("ChatPage: Subscribing to conversations for user:", currentUser.uid);
-    setIsLoadingConversations(true);
 
     const q = query(
       collection(db, "conversations"),
@@ -88,8 +81,6 @@ function ChatPageContent() {
     );
 
     const unsubscribe = onSnapshot(q, async (querySnapshot) => {
-      console.log(`ChatPage: Conversations snapshot received (${querySnapshot.docs.length} docs)`);
-
       const convosPromises = querySnapshot.docs.map(async (docSnap) => {
         const data = docSnap.data();
         const otherUid = data.participantUids.find((uid: string) => uid !== currentUser.uid);
@@ -109,33 +100,36 @@ function ChatPageContent() {
       });
 
       const resolvedConvos = await Promise.all(convosPromises);
-      setConversations(resolvedConvos);
+      
+      // Filter out duplicate conversations between the same users
+      const uniqueConvos = resolvedConvos.reduce((acc, current) => {
+        const sortedPair = [...current.participantUids].sort().join('_');
+        if (!acc.find(item => [...item.participantUids].sort().join('_') === sortedPair)) {
+          acc.push(current);
+        }
+        return acc;
+      }, [] as ChatConversation[]);
+
+      setConversations(uniqueConvos);
       setIsLoadingConversations(false);
-      console.log("ChatPage: Conversations processed, count:", resolvedConvos.length);
     }, (error) => {
-      console.error("Error fetching conversations: ", error);
-      toast({ title: "Error", description: "Could not fetch conversations.", variant: "destructive" });
+      const permissionError = new FirestorePermissionError({
+        path: 'conversations',
+        operation: 'list',
+      });
+      errorEmitter.emit('permission-error', permissionError);
       setIsLoadingConversations(false);
     });
 
-    return () => {
-      console.log("ChatPage: Unsubscribing from conversations.");
-      unsubscribe();
-    };
+    return () => unsubscribe();
   }, [currentUser, authLoading, toast, getCachedUserDetails]);
 
-  // Effect 2: Handle creating a new chat from URL params
   useEffect(() => {
     const newChatWithUserId = searchParams.get('newChatWith');
-    if (!newChatWithUserId || !currentUser?.uid) {
-      return;
-    }
+    if (!newChatWithUserId || !currentUser?.uid) return;
 
     const findOrCreateChat = async () => {
-        console.log(`ChatPage: Attempting to find or create chat with ${newChatWithUserId}`);
-        
         if (newChatWithUserId === currentUser.uid) {
-            toast({ title: "Cannot chat with yourself", variant: "destructive" });
             router.replace('/chat');
             return;
         }
@@ -147,31 +141,27 @@ function ChatPageContent() {
         const docSnap = await getDoc(conversationDocRef);
         
         if (!docSnap.exists()) {
-            console.log(`ChatPage: No existing conversation found. Creating new one with ID ${conversationId}.`);
             const otherUser = await getCachedUserDetails(newChatWithUserId);
             if (otherUser) {
-                try {
-                    const newConvoData = {
-                        participantUids: sortedUids,
-                        lastMessage: null,
-                        unreadCount: { [currentUser.uid]: 0, [newChatWithUserId]: 0 },
-                        createdAt: serverTimestamp(),
-                        updatedAt: serverTimestamp(),
-                    };
-                    await setDoc(conversationDocRef, newConvoData);
-                    console.log(`ChatPage: New conversation created: ${conversationId}`);
-                } catch (error) {
-                    console.error("Error creating new conversation:", error);
-                    toast({ title: "Error", description: "Could not start new chat.", variant: "destructive" });
-                }
-            } else {
-                toast({ title: "Error", description: "Could not find user to chat with.", variant: "destructive" });
+                const newConvoData = {
+                    participantUids: sortedUids,
+                    lastMessage: null,
+                    unreadCount: { [currentUser.uid]: 0, [newChatWithUserId]: 0 },
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                };
+                setDoc(conversationDocRef, newConvoData)
+                  .catch(async () => {
+                    const permissionError = new FirestorePermissionError({
+                      path: conversationDocRef.path,
+                      operation: 'create',
+                      requestResourceData: newConvoData,
+                    });
+                    errorEmitter.emit('permission-error', permissionError);
+                  });
             }
-        } else {
-            console.log(`ChatPage: Found existing conversation: ${conversationId}`);
         }
 
-        // Navigate to the chat, removing the 'newChatWith' and 'itemId' params
         const newParams = new URLSearchParams(searchParams.toString());
         newParams.delete('newChatWith');
         newParams.delete('itemId');
@@ -180,35 +170,23 @@ function ChatPageContent() {
     };
     
     findOrCreateChat();
-    
-  }, [searchParams.toString(), currentUser, router, toast, pathname, getCachedUserDetails]);
+  }, [searchParams, currentUser, router, pathname, getCachedUserDetails]);
 
-  // Effect 3: Handle selecting a chat from URL or defaulting to the first one
   useEffect(() => {
-    if (isLoadingConversations || searchParams.has('newChatWith')) {
-        return;
-    }
+    if (isLoadingConversations || searchParams.has('newChatWith')) return;
 
     const chatIdFromUrl = searchParams.get('chatId');
-
     if (chatIdFromUrl) {
       if (conversations.some(c => c.id === chatIdFromUrl)) {
         if (selectedChatId !== chatIdFromUrl) {
-          console.log(`ChatPage: Selecting chat from URL: ${chatIdFromUrl}`);
           setSelectedChatId(chatIdFromUrl);
         }
-      } else {
-        console.warn(`ChatPage: Chat ID from URL (${chatIdFromUrl}) not found in loaded conversations.`);
       }
     } else if (conversations.length > 0 && !selectedChatId) {
-      const firstChatId = conversations[0].id;
-      console.log(`ChatPage: No chat selected, defaulting to first conversation: ${firstChatId}`);
-      setSelectedChatId(firstChatId);
+      setSelectedChatId(conversations[0].id);
     }
   }, [conversations, isLoadingConversations, searchParams, selectedChatId]);
 
-
-  // Effect 4: Fetch messages for the selected chat and mark as read
   useEffect(() => {
     if (!selectedChatId || !currentUser?.uid) {
       setMessages([]);
@@ -216,7 +194,6 @@ function ChatPageContent() {
       return;
     }
     
-    console.log(`ChatPage: Subscribing to messages for chat: ${selectedChatId}`);
     setIsLoadingMessages(true);
     const messagesQuery = query(
       collection(db, "conversations", selectedChatId, "messages"),
@@ -224,7 +201,6 @@ function ChatPageContent() {
     );
 
     const unsubscribe = onSnapshot(messagesQuery, async (querySnapshot) => {
-      console.log(`ChatPage: Messages snapshot received for chat ${selectedChatId} (${querySnapshot.docs.length} docs)`);
       const msgs: ChatMessage[] = querySnapshot.docs.map(docSnap => ({
         id: docSnap.id,
         ...docSnap.data(),
@@ -235,17 +211,22 @@ function ChatPageContent() {
       
       const currentConvoDetails = conversations.find(c => c.id === selectedChatId);
       if (currentConvoDetails && (currentConvoDetails.unreadCount?.[currentUser.uid] || 0) > 0) {
-        try {
-          const conversationDocRef = doc(db, "conversations", selectedChatId);
-          await updateDoc(conversationDocRef, { [`unreadCount.${currentUser.uid}`]: 0 });
-          console.log(`ChatPage: Marked messages as read for user in chat ${selectedChatId}`);
-        } catch (error) {
-          console.error("Error marking messages as read:", error);
-        }
+        updateDoc(doc(db, "conversations", selectedChatId), { [`unreadCount.${currentUser.uid}`]: 0 })
+          .catch(async () => {
+            const permissionError = new FirestorePermissionError({
+              path: `conversations/${selectedChatId}`,
+              operation: 'update',
+              requestResourceData: { [`unreadCount.${currentUser.uid}`]: 0 },
+            });
+            errorEmitter.emit('permission-error', permissionError);
+          });
       }
     }, (error) => {
-      console.error(`Error fetching messages for chat ${selectedChatId}: `, error);
-      toast({ title: "Error", description: "Could not fetch messages.", variant: "destructive" });
+      const permissionError = new FirestorePermissionError({
+        path: `conversations/${selectedChatId}/messages`,
+        operation: 'list',
+      });
+      errorEmitter.emit('permission-error', permissionError);
       setIsLoadingMessages(false);
     });
     
@@ -257,15 +238,10 @@ function ChatPageContent() {
         }
     }
 
-    return () => {
-       console.log(`ChatPage: Unsubscribing from messages for chat: ${selectedChatId}`);
-       unsubscribe();
-    }
-  }, [selectedChatId, currentUser?.uid, conversations, toast]);
-
+    return () => unsubscribe();
+  }, [selectedChatId, currentUser?.uid, conversations]);
 
   const handleSelectChat = (chatId: string) => {
-    console.log(`ChatPage: User selected chat: ${chatId}`);
     setSelectedChatId(chatId);
     const newParams = new URLSearchParams(searchParams.toString());
     newParams.set('chatId', chatId);
@@ -273,55 +249,48 @@ function ChatPageContent() {
   };
 
   const handleSendMessage = async (messageText: string) => {
-    if (!currentUser?.uid || !selectedChatId) {
-        toast({title: "Cannot send message", description: "User or chat not selected.", variant: "destructive"});
-        return;
-    }
+    if (!currentUser?.uid || !selectedChatId) return;
 
     const currentConvo = conversations.find(c => c.id === selectedChatId);
-    if (!currentConvo) {
-        toast({title: "Cannot send message", description: "Conversation not found.", variant: "destructive"});
-        return;
-    }
+    if (!currentConvo) return;
 
     const receiverUid = currentConvo.participantUids.find(uid => uid !== currentUser.uid);
-    if (!receiverUid) {
-        toast({title: "Cannot send message", description: "Recipient not found.", variant: "destructive"});
-        return;
-    }
+    if (!receiverUid) return;
     
-    try {
-      const batch = writeBatch(db);
-      
-      const newMessageRef = doc(collection(db, "conversations", selectedChatId, "messages"));
-      batch.set(newMessageRef, {
-        senderId: currentUser.uid,
-        receiverId: receiverUid,
+    const newMessageRef = doc(collection(db, "conversations", selectedChatId, "messages"));
+    const messageData = {
+      senderId: currentUser.uid,
+      receiverId: receiverUid,
+      text: messageText,
+      timestamp: serverTimestamp(),
+      isRead: false,
+    };
+
+    const conversationDocRef = doc(db, "conversations", selectedChatId);
+    const currentUnreadCount = currentConvo.unreadCount?.[receiverUid] || 0;
+    const conversationUpdateData = {
+      lastMessage: {
         text: messageText,
+        senderId: currentUser.uid,
         timestamp: serverTimestamp(),
-        isRead: false,
+      },
+      updatedAt: serverTimestamp(),
+      [`unreadCount.${receiverUid}`]: currentUnreadCount + 1,
+      [`unreadCount.${currentUser.uid}`]: 0,
+    };
+
+    const batch = writeBatch(db);
+    batch.set(newMessageRef, messageData);
+    batch.update(conversationDocRef, conversationUpdateData);
+
+    batch.commit().catch(async () => {
+      const permissionError = new FirestorePermissionError({
+        path: conversationDocRef.path,
+        operation: 'write',
+        requestResourceData: { messageData, conversationUpdateData },
       });
-
-      const conversationDocRef = doc(db, "conversations", selectedChatId);
-      const currentUnreadCount = currentConvo.unreadCount?.[receiverUid] || 0;
-      batch.update(conversationDocRef, {
-        lastMessage: {
-          text: messageText,
-          senderId: currentUser.uid,
-          timestamp: serverTimestamp(),
-        },
-        updatedAt: serverTimestamp(),
-        [`unreadCount.${receiverUid}`]: currentUnreadCount + 1,
-        [`unreadCount.${currentUser.uid}`]: 0,
-      });
-
-      await batch.commit();
-      console.log("ChatPage: Message sent and conversation updated in a batch for chat:", selectedChatId);
-
-    } catch (error) {
-        console.error("Error sending message:", error);
-        toast({title: "Message Failed", description: "Could not send message.", variant: "destructive"});
-    }
+      errorEmitter.emit('permission-error', permissionError);
+    });
   };
   
   if (authLoading) {

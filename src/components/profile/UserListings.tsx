@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from 'react';
@@ -6,7 +5,7 @@ import type { Listing } from '@/types';
 import { useAuth } from '@/hooks/use-auth';
 import { ItemCard } from '@/components/browse/ItemCard';
 import { Button } from '@/components/ui/button';
-import { Edit3, PlusCircle, Trash2, Frown, Loader2, ShoppingBag, Undo2 } from 'lucide-react'; // Added Undo2
+import { Edit3, PlusCircle, Trash2, Frown, Loader2, ShoppingBag, Undo2 } from 'lucide-react';
 import Link from 'next/link';
 import {
   AlertDialog,
@@ -23,168 +22,100 @@ import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '../ui/skeleton';
 import { db } from '@/lib/firebase';
 import { collection, query, where, orderBy, getDocs, deleteDoc, doc, Timestamp, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { errorEmitter } from '@/firebase/error-emitter';
+import { FirestorePermissionError } from '@/firebase/errors';
 
 export function UserListings() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [userListings, setUserListings] = useState<Listing[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isUpdatingStatus, setIsUpdatingStatus] = useState<string | null>(null); // To track which item is being updated
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchListings = async () => {
-      if (user) {
-        setIsLoading(true);
-        try {
-          const listingsRef = collection(db, "listings");
-          const q = query(listingsRef, where("sellerId", "==", user.uid), orderBy("createdAt", "desc"));
-          const querySnapshot = await getDocs(q);
-          const listings = querySnapshot.docs.map(doc => ({ 
-            id: doc.id, 
-            ...doc.data(),
-            createdAt: (doc.data().createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
-            updatedAt: (doc.data().updatedAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
-          } as Listing));
-          setUserListings(listings);
-        } catch (error) {
-          console.error("Error fetching user listings:", error);
-          toast({ title: "Error", description: "Could not fetch your listings.", variant: "destructive" });
-        } finally {
-          setIsLoading(false);
-        }
-      } else {
-        setUserListings([]);
+      if (!user) return;
+      setIsLoading(true);
+      try {
+        const listingsRef = collection(db, "listings");
+        const q = query(listingsRef, where("sellerId", "==", user.uid), orderBy("createdAt", "desc"));
+        const querySnapshot = await getDocs(q);
+        const listings = querySnapshot.docs.map(doc => ({ 
+          id: doc.id, 
+          ...doc.data(),
+          createdAt: (doc.data().createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
+        } as Listing));
+        setUserListings(listings);
+      } catch (error) {
+        toast({ title: "Error", description: "Could not fetch your listings.", variant: "destructive" });
+      } finally {
         setIsLoading(false);
       }
     };
-
     fetchListings();
   }, [user, toast]);
 
-  const handleDeleteListing = async (listingToDelete: Listing) => {
-    try {
-      await deleteDoc(doc(db, "listings", listingToDelete.id));
-      console.log(`Listing ${listingToDelete.id} deleted. Associated image ${listingToDelete.imageUrl} on Cloudinary is not deleted from client-side.`);
-      setUserListings(prev => prev.filter(item => item.id !== listingToDelete.id));
-      toast({ title: "Listing Deleted", description: `"${listingToDelete.title}" has been removed from Firestore.` });
-    } catch (error: any) {
-      console.error("Error deleting listing:", error);
-      toast({ title: "Deletion Failed", description: error.message || "Could not delete the listing.", variant: "destructive" });
-    }
+  const handleDeleteListing = async (listing: Listing) => {
+    const listingRef = doc(db, "listings", listing.id);
+    deleteDoc(listingRef).then(() => {
+      setUserListings(prev => prev.filter(item => item.id !== listing.id));
+      toast({ title: "Listing Deleted" });
+    }).catch(async () => {
+      const permissionError = new FirestorePermissionError({
+        path: listingRef.path,
+        operation: 'delete',
+      });
+      errorEmitter.emit('permission-error', permissionError);
+    });
   };
 
   const handleStatusToggle = async (listing: Listing) => {
     const newStatus = listing.status === 'sold' ? 'available' : 'sold';
-    const listingId = listing.id;
+    setIsUpdatingStatus(listing.id);
+    const listingRef = doc(db, "listings", listing.id);
+    const updateData = { status: newStatus, updatedAt: serverTimestamp() };
 
-    setIsUpdatingStatus(listingId);
-    try {
-      const listingRef = doc(db, "listings", listingId);
-      await updateDoc(listingRef, {
-        status: newStatus,
-        updatedAt: serverTimestamp()
+    updateDoc(listingRef, updateData).then(() => {
+      setUserListings(prev => prev.map(item => item.id === listing.id ? { ...item, status: newStatus } : item));
+      toast({ title: `Marked as ${newStatus}` });
+    }).catch(async () => {
+      const permissionError = new FirestorePermissionError({
+        path: listingRef.path,
+        operation: 'update',
+        requestResourceData: updateData,
       });
-      setUserListings(prevListings =>
-        prevListings.map(item =>
-          item.id === listingId ? { ...item, status: newStatus, updatedAt: new Date().toISOString() } : item
-        )
-      );
-      toast({ title: "Success", description: `Listing marked as ${newStatus}.` });
-    } catch (error: any) {
-      console.error(`Error marking as ${newStatus}:`, error);
-      toast({ title: "Update Failed", description: error.message || `Could not mark listing as ${newStatus}.`, variant: "destructive" });
-    } finally {
+      errorEmitter.emit('permission-error', permissionError);
+    }).finally(() => {
       setIsUpdatingStatus(null);
-    }
+    });
   };
-  
-  const CardSkeleton = () => (
-    <div className="border rounded-lg p-4 space-y-3 shadow">
-      <Skeleton className="h-40 w-full rounded bg-muted/70" />
-      <Skeleton className="h-5 w-3/4 bg-muted/70" />
-      <Skeleton className="h-4 w-1/2 bg-muted/70" />
-      <div className="flex gap-2 pt-2">
-        <Skeleton className="h-9 w-1/2 bg-muted/70" />
-        <Skeleton className="h-9 w-1/2 bg-muted/70" />
-      </div>
-    </div>
-  );
 
-  if (isLoading) {
-    return (
-      <div className="space-y-6">
-        <div className="flex justify-between items-center">
-           <Skeleton className="h-8 w-48 bg-muted/70" />
-           <Skeleton className="h-10 w-32 bg-muted/70" />
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[...Array(3)].map((_, i) => (
-            <CardSkeleton key={i} />
-          ))}
-        </div>
-      </div>
-    );
-  }
+  if (isLoading) return <div className="p-8 text-center"><Loader2 className="animate-spin inline mr-2" /> Loading...</div>;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <h2 className="text-2xl font-semibold text-foreground">My Active Listings ({userListings.filter(l => l.status === 'available').length})</h2>
-        <Link href="/create-listing">
-          <Button className="bg-primary hover:bg-primary/90 text-primary-foreground">
-            <PlusCircle className="mr-2 h-5 w-5" /> List a New Item
-          </Button>
-        </Link>
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold">My Listings</h2>
+        <Link href="/create-listing"><Button><PlusCircle className="mr-2 h-4 w-4" /> New Listing</Button></Link>
       </div>
 
       {userListings.length > 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {userListings.map(item => (
             <div key={item.id} className="relative group">
               <ItemCard item={item} />
-              <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10">
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className={`bg-background/90 shadow-md text-xs px-2 py-1 h-auto w-full ${
-                        item.status === 'sold'
-                        ? 'hover:bg-primary/10 hover:text-primary'
-                        : 'hover:bg-green-500/20 hover:text-green-700'
-                    }`}
-                    onClick={() => handleStatusToggle(item)}
-                    disabled={isUpdatingStatus === item.id}
-                >
-                    {isUpdatingStatus === item.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : item.status === 'sold' ? (
-                        <><Undo2 className="h-3 w-3 mr-1" /> Mark Available</>
-                    ) : (
-                        <><ShoppingBag className="h-3 w-3 mr-1" /> Mark Sold</>
-                    )}
+              <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                <Button variant="secondary" size="sm" onClick={() => handleStatusToggle(item)} disabled={isUpdatingStatus === item.id}>
+                  {item.status === 'sold' ? <><Undo2 className="h-4 w-4 mr-2" /> Make Available</> : <><ShoppingBag className="h-4 w-4 mr-2" /> Mark Sold</>}
                 </Button>
-                <Link href={`/profile?editListing=${item.id}`}>
-                  <Button variant="outline" size="sm" className="bg-background/90 hover:bg-background shadow-md text-xs px-2 py-1 h-auto w-full">
-                    <Edit3 className="h-3 w-3 mr-1" /> Edit
-                  </Button>
-                </Link>
+                <Link href={`/profile?editListing=${item.id}`}><Button variant="secondary" size="sm"><Edit3 className="h-4 w-4 mr-2" /> Edit</Button></Link>
                 <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="destructive" size="sm" className="bg-destructive/80 hover:bg-destructive text-destructive-foreground shadow-md text-xs px-2 py-1 h-auto w-full">
-                      <Trash2 className="h-3 w-3 mr-1" /> Delete
-                    </Button>
-                  </AlertDialogTrigger>
+                  <AlertDialogTrigger asChild><Button variant="destructive" size="sm"><Trash2 className="h-4 w-4 mr-2" /> Delete</Button></AlertDialogTrigger>
                   <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        This action cannot be undone. This will permanently delete your listing for "{item.title}" from Firestore. The image on Cloudinary will not be automatically deleted.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
+                    <AlertDialogHeader><AlertDialogTitle>Delete Listing?</AlertDialogTitle></AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => handleDeleteListing(item)} className="bg-destructive hover:bg-destructive/90">
-                        Delete
-                      </AlertDialogAction>
+                      <AlertDialogAction onClick={() => handleDeleteListing(item)}>Delete</AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
@@ -193,12 +124,9 @@ export function UserListings() {
           ))}
         </div>
       ) : (
-        <div className="text-center py-12 border-2 border-dashed rounded-lg bg-card">
-          <Frown className="mx-auto h-16 w-16 text-muted-foreground mb-4" />
-          <h3 className="text-xl font-semibold text-foreground mb-2">No listings yet!</h3>
-          <p className="text-muted-foreground mb-6">
-            Why not sell something? Click the button above to get started.
-          </p>
+        <div className="text-center py-20 bg-muted/30 rounded-lg">
+          <Frown className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
+          <p>No listings found. Start selling today!</p>
         </div>
       )}
     </div>

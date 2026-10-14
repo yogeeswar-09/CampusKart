@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from 'react';
@@ -9,11 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, MessageCircle, Edit3, Loader2, AlertTriangle, ShoppingBag, HandCoins } from 'lucide-react';
+import { Edit3, Loader2, AlertTriangle, ShoppingBag, HandCoins, MessageCircle } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import Link from 'next/link';
 import { Skeleton } from '@/components/ui/skeleton';
-import { doc, getDoc, Timestamp, collection, query, where, getDocs, addDoc, serverTimestamp, updateDoc, writeBatch, setDoc } from 'firebase/firestore';
+import { doc, getDoc, Timestamp, collection, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { formatDistanceToNow } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
@@ -29,7 +28,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from '@/lib/utils';
+import { errorEmitter } from '@/firebase/error-emitter';
+import { FirestorePermissionError } from '@/firebase/errors';
 
 export default function ListingDetailPage() {
   const params = useParams();
@@ -50,73 +50,44 @@ export default function ListingDetailPage() {
       if (!id) return;
       setIsLoading(true);
 
-      // Step 1: Fetch Listing
-      let fetchedListingData: Listing | null = null;
       try {
         const listingRef = doc(db, "listings", id);
         const listingSnap = await getDoc(listingRef);
 
         if (listingSnap.exists()) {
           const rawData = listingSnap.data();
-          fetchedListingData = {
+          const fetchedListingData = {
             id: listingSnap.id,
             ...rawData,
             createdAt: (rawData.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
           } as Listing;
           setListing(fetchedListingData);
-        } else {
-          console.warn("No such listing document!");
-          setListing(null);
-          setIsLoading(false);
-          return; // Exit early
+
+          if (fetchedListingData.sellerId) {
+            const sellerRef = doc(db, "users", fetchedListingData.sellerId);
+            const sellerSnap = await getDoc(sellerRef);
+            if (sellerSnap.exists()) {
+              setSeller({ uid: sellerSnap.id, ...sellerSnap.data() } as User);
+            }
+          }
         }
       } catch (error: any) {
-        console.error("Error fetching MAIN LISTING (ID: " + id + ") details:", error);
         toast({
           title: "Error Loading Item",
-          description: `Could not load item details. ${error.message}`,
+          description: "Could not load item details.",
           variant: "destructive",
         });
-        setListing(null);
+      } finally {
         setIsLoading(false);
-        return; // Exit if listing fetch fails
       }
-
-      // Step 2: Fetch Seller
-      if (fetchedListingData?.sellerId) {
-        try {
-          const sellerRef = doc(db, "users", fetchedListingData.sellerId);
-          const sellerSnap = await getDoc(sellerRef);
-          if (sellerSnap.exists()) {
-            setSeller({ uid: sellerSnap.id, ...sellerSnap.data() } as User);
-          } else {
-             setSeller(null);
-          }
-        } catch (error:any) {
-          console.error("Error fetching SELLER (ID: " + fetchedListingData.sellerId + ") details:", error);
-          toast({
-            title: "Error Loading Seller Info",
-            description: `Could not load seller details. ${error.message}`,
-            variant: "destructive",
-          });
-          setSeller(null);
-        }
-      }
-      setIsLoading(false);
     };
 
     fetchListingAndSeller();
   }, [id, toast]);
 
   const handleSendOffer = async () => {
-    if (!currentUser || !seller || !listing) {
-        toast({ title: "Error", description: "Cannot send offer. Missing user or listing details.", variant: "destructive" });
-        return;
-    }
-    if (!offerPrice || isNaN(parseFloat(offerPrice)) || parseFloat(offerPrice) <= 0) {
-        toast({ title: "Invalid Offer", description: "Please enter a valid, positive offer price.", variant: "destructive" });
-        return;
-    }
+    if (!currentUser || !seller || !listing) return;
+    if (!offerPrice || isNaN(parseFloat(offerPrice)) || parseFloat(offerPrice) <= 0) return;
 
     setIsSendingOffer(true);
     const offerMessage = `Hi! I would like to make an offer of ₹${parseFloat(offerPrice).toFixed(2)} for your item: "${listing.title}".`;
@@ -126,18 +97,16 @@ export default function ListingDetailPage() {
 
     try {
         const batch = writeBatch(db);
-
-        // 1. Add the new message to the subcollection
         const newMessageRef = doc(collection(db, "conversations", conversationId, "messages"));
-        batch.set(newMessageRef, {
+        const messageData = {
             senderId: currentUser.uid,
             receiverId: seller.uid,
             text: offerMessage,
             timestamp: serverTimestamp(),
             isRead: false,
-        });
+        };
+        batch.set(newMessageRef, messageData);
 
-        // 2. Create or update the main conversation document
         const convoSnap = await getDoc(conversationDocRef);
         const currentUnreadCount = convoSnap.data()?.unreadCount?.[seller.uid] || 0;
 
@@ -157,54 +126,36 @@ export default function ListingDetailPage() {
             conversationData.createdAt = serverTimestamp();
         }
 
-        // Use set with merge to create or update the conversation doc
         batch.set(conversationDocRef, conversationData, { merge: true });
         
-        await batch.commit();
-        
-        toast({ title: "Offer Sent!", description: "Your offer has been sent to the seller." });
-        setIsOfferDialogOpen(false);
-        setOfferPrice('');
-        router.push(`/chat?chatId=${conversationId}`);
+        batch.commit().then(() => {
+          toast({ title: "Offer Sent!", description: "Your offer has been sent to the seller." });
+          setIsOfferDialogOpen(false);
+          setOfferPrice('');
+          router.push(`/chat?chatId=${conversationId}`);
+        }).catch(async () => {
+          const permissionError = new FirestorePermissionError({
+            path: conversationDocRef.path,
+            operation: 'write',
+            requestResourceData: conversationData,
+          });
+          errorEmitter.emit('permission-error', permissionError);
+        });
 
     } catch (error: any) {
-        console.error("Error sending offer:", error);
-        toast({ title: "Failed to Send Offer", description: error.message || "An unknown error occurred.", variant: "destructive" });
+        toast({ title: "Failed to Send Offer", description: "An unexpected error occurred.", variant: "destructive" });
     } finally {
         setIsSendingOffer(false);
     }
   };
 
-
   if (isLoading) {
     return (
       <div className="container mx-auto py-8 px-4">
-        <div className="grid md:grid-cols-5 gap-8 lg:gap-12">
-          <div className="md:col-span-3">
-            <Skeleton className="w-full aspect-video rounded-lg" />
-            <div className="mt-4 grid grid-cols-4 gap-2">
-              {[...Array(4)].map((_, i) => <Skeleton key={i} className="w-full aspect-square rounded" />)}
-            </div>
-          </div>
-          <div className="md:col-span-2 space-y-6">
-            <Skeleton className="h-10 w-3/4" />
-            <Skeleton className="h-8 w-1/4" />
-            <Skeleton className="h-5 w-20" />
-            <Skeleton className="h-5 w-1/2" />
-            <Skeleton className="h-24 w-full" />
-            <div className="flex items-center space-x-4 border-t pt-6 mt-6">
-              <Skeleton className="h-12 w-12 rounded-full" />
-              <div className="space-y-2">
-                <Skeleton className="h-5 w-32" />
-                <Skeleton className="h-4 w-24" />
-              </div>
-            </div>
-            <div className="flex gap-4 mt-6">
-              <Skeleton className="h-12 w-1/2" />
-              <Skeleton className="h-12 w-1/2" />
-            </div>
-          </div>
-        </div>
+        <Skeleton className="w-full h-96 rounded-lg mb-8" />
+        <Skeleton className="h-10 w-1/2 mb-4" />
+        <Skeleton className="h-6 w-1/4 mb-8" />
+        <Skeleton className="h-32 w-full" />
       </div>
     );
   }
@@ -214,7 +165,6 @@ export default function ListingDetailPage() {
       <div className="container mx-auto py-8 text-center">
         <AlertTriangle className="mx-auto h-16 w-16 text-destructive mb-4" />
         <h3 className="text-xl font-semibold text-foreground mb-2">Listing not found</h3>
-        <p className="text-muted-foreground">This item may have been removed or the link is incorrect.</p>
       </div>
     );
   }
@@ -228,10 +178,6 @@ export default function ListingDetailPage() {
   
   const timeAgo = listing.createdAt ? formatDistanceToNow(new Date(listing.createdAt as string), { addSuffix: true }) : 'unknown';
 
-  const discountPercentage = listing.originalPrice && listing.originalPrice > listing.price
-    ? Math.round(((listing.originalPrice - listing.price) / listing.originalPrice) * 100)
-    : 0;
-
   return (
     <div className="container mx-auto py-8 px-4">
       <div className="grid md:grid-cols-5 gap-8 lg:gap-12">
@@ -244,7 +190,6 @@ export default function ListingDetailPage() {
               sizes="(max-width: 768px) 100vw, (max-width: 1200px) 60vw, 50vw"
               className="object-contain"
               priority
-              data-ai-hint={`${listing.category.toLowerCase()} detail view`}
             />
              {listing.status === 'sold' && (
                 <div className="absolute top-3 right-3 bg-destructive/90 text-destructive-foreground py-1.5 px-4 rounded-md text-sm font-semibold shadow-lg flex items-center">
@@ -270,18 +215,13 @@ export default function ListingDetailPage() {
                           ₹{listing.originalPrice.toFixed(2)}
                       </p>
                   )}
-                  {discountPercentage > 0 && (
-                      <Badge variant="destructive" className="bg-green-600 hover:bg-green-700 border-none text-white font-semibold">
-                          {discountPercentage}% OFF
-                      </Badge>
-                  )}
               </div>
               <p className="text-xs text-muted-foreground mt-1">Listed {timeAgo}</p>
             </CardHeader>
             <CardContent>
               <p className="text-muted-foreground leading-relaxed mb-6">{listing.description}</p>
               
-              {seller ? (
+              {seller && (
                 <div className="border-t pt-6">
                   <h3 className="text-md font-semibold text-foreground mb-3">Seller Information</h3>
                   <div className="flex items-center space-x-3">
@@ -295,34 +235,15 @@ export default function ListingDetailPage() {
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="border-t pt-6">
-                   <h3 className="text-md font-semibold text-foreground mb-3">Seller Information</h3>
-                   <p className="text-sm text-muted-foreground">Seller details could not be loaded.</p>
-                </div>
               )}
 
               <div className="mt-8 flex flex-col gap-3">
                 {currentUser?.uid === seller?.uid ? (
-                  <>
-                    <Link href={`/profile?editListing=${listing.id}`} passHref legacyBehavior>
-                      <Button size="lg" variant="outline" className="w-full text-base border-primary text-primary hover:bg-primary/10">
-                         <Edit3 className="mr-2 h-5 w-5" /> Edit Your Listing
-                      </Button>
-                    </Link>
-                    {listing.status === 'available' && (
-                       <Button 
-                          size="lg" 
-                          variant="default"
-                          className="w-full text-base bg-green-600 hover:bg-green-700 text-white"
-                          onClick={() => {
-                            toast({ title: "Action Needed", description: "Please mark as sold from your profile's 'My Listings' section."});
-                          }}
-                        >
-                         <ShoppingBag className="mr-2 h-5 w-5" /> Mark as Sold (From Profile)
-                       </Button>
-                    )}
-                  </>
+                  <Link href={`/profile?editListing=${listing.id}`} passHref legacyBehavior>
+                    <Button size="lg" variant="outline" className="w-full text-base border-primary text-primary hover:bg-primary/10">
+                       <Edit3 className="mr-2 h-5 w-5" /> Edit Your Listing
+                    </Button>
+                  </Link>
                 ) : listing.status !== 'sold' ? (
                   <>
                     <Link href={`/chat?newChatWith=${listing.sellerId}&itemId=${listing.id}`} passHref legacyBehavior>
