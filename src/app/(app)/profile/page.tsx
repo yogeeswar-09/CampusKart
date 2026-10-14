@@ -2,14 +2,14 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UserInfoForm } from "@/components/profile/UserInfoForm";
 import { UserListings } from "@/components/profile/UserListings";
 import { ListingForm } from '@/components/listings/ListingForm';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Settings, ListChecks, Edit, Loader2, ShoppingBag, Package, CheckCircle, TrendingUp } from 'lucide-react';
+import { Settings, ListChecks, Edit, Loader2, ShoppingBag, Package, CheckCircle } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { Skeleton } from '@/components/ui/skeleton';
 import { doc, getDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
@@ -23,23 +23,24 @@ interface UserStats {
 }
 
 function ProfilePageContent() {
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const { user, isLoading: authLoading } = useAuth();
+  
   const [listingToEdit, setListingToEdit] = useState<Listing | undefined>(undefined);
   const [editingListingLoading, setEditingListingLoading] = useState(false);
-  const [errorEditing, setErrorEditing] = useState<string | null>(null);
 
   const [userStats, setUserStats] = useState<UserStats>({ total: 0, available: 0, sold: 0 });
   const [isLoadingStats, setIsLoadingStats] = useState(true);
 
-  const defaultTab = searchParams.get('tab') || "listings";
+  const currentTab = searchParams.get('tab') || "listings";
   const editListingId = searchParams.get('editListing');
   
   useEffect(() => {
     const fetchListingForEdit = async () => {
       if (editListingId && user) {
         setEditingListingLoading(true);
-        setErrorEditing(null);
         try {
           const listingRef = doc(db, "listings", editListingId);
           const docSnap = await getDoc(listingRef);
@@ -53,23 +54,15 @@ function ProfilePageContent() {
             } as Listing;
             if (fetchedListing.sellerId === user.uid) {
               setListingToEdit(fetchedListing);
-            } else {
-              setErrorEditing("You do not have permission to edit this listing.");
-              setListingToEdit(undefined);
             }
-          } else {
-            setErrorEditing("Listing not found.");
-            setListingToEdit(undefined);
           }
         } catch (err) {
           console.error("Error fetching listing for edit:", err);
-          setErrorEditing("Failed to load listing data.");
-          setListingToEdit(undefined);
         } finally {
           setEditingListingLoading(false);
         }
       } else {
-        setListingToEdit(undefined); // Clear if no editListingId or no user
+        setListingToEdit(undefined);
       }
     };
     fetchListingForEdit();
@@ -89,24 +82,24 @@ function ProfilePageContent() {
           let sold = 0;
 
           querySnapshot.forEach((doc) => {
-            const listingData = doc.data() as Listing; // Assuming status is part of Listing type
+            const listingData = doc.data() as Listing;
             total++;
             if (listingData.status === 'sold') {
               sold++;
-            } else if (listingData.status === 'available') { // Default to available if status not 'sold'
+            } else {
               available++;
             }
           });
           setUserStats({ total, available, sold });
         } catch (error) {
           console.error("Error fetching user listing stats:", error);
-          setUserStats({ total: 0, available: 0, sold: 0 }); // Reset on error
+          setUserStats({ total: 0, available: 0, sold: 0 });
         } finally {
           setIsLoadingStats(false);
         }
       }
     };
-    if (!authLoading) { // Fetch stats only when auth state is resolved and user is available
+    if (!authLoading) {
         fetchUserStats();
     }
   }, [user, authLoading]);
@@ -118,10 +111,16 @@ function ProfilePageContent() {
     return names[0][0].toUpperCase() + names[names.length - 1][0].toUpperCase();
   };
 
+  const handleTabChange = (value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('editListing');
+    params.set('tab', value);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  };
+
   if (authLoading) {
     return (
       <div className="container mx-auto py-8 space-y-6">
-        {/* Skeleton for Summary Card */}
         <Card className="mb-10 shadow-lg overflow-hidden">
           <CardHeader className="flex flex-col sm:flex-row items-center space-y-4 sm:space-y-0 sm:space-x-6 p-6 bg-gradient-to-r from-primary/10 via-card to-accent/5">
             <Skeleton className="h-20 w-20 rounded-full bg-muted/70" />
@@ -141,7 +140,6 @@ function ProfilePageContent() {
             ))}
           </CardContent>
         </Card>
-        {/* Skeleton for Tabs */}
         <Skeleton className="h-10 w-full md:w-1/2 mb-6 bg-muted/70" />
         <Card>
           <CardHeader><Skeleton className="h-8 w-1/4 bg-muted/70" /></CardHeader>
@@ -162,16 +160,6 @@ function ProfilePageContent() {
         </div>
       );
     }
-    if (errorEditing) {
-      return (
-        <div className="container mx-auto py-8 text-center">
-          <h1 className="text-2xl font-semibold text-destructive">{errorEditing}</h1>
-          <Link href="/profile" className="text-primary hover:underline mt-4 inline-block">
-            Back to Profile
-          </Link>
-        </div>
-      );
-    }
     if (listingToEdit) {
       return (
         <div className="container mx-auto py-8">
@@ -182,18 +170,7 @@ function ProfilePageContent() {
         </div>
       );
     }
-     if (!listingToEdit && !editingListingLoading) {
-        return (
-            <div className="container mx-auto py-8 text-center">
-            <h1 className="text-2xl font-semibold">Listing not found or you do not have permission to edit it.</h1>
-            <Link href="/profile" className="text-primary hover:underline mt-4 inline-block">
-                Back to Profile
-            </Link>
-            </div>
-        );
-     }
   }
-
 
   return (
     <div className="container mx-auto py-8">
@@ -244,12 +221,7 @@ function ProfilePageContent() {
         </div>
       )}
 
-      <Tabs defaultValue={defaultTab} className="w-full" onValueChange={(value) => {
-         const currentUrl = new URL(window.location.href);
-         currentUrl.searchParams.delete('editListing');
-         currentUrl.searchParams.set('tab', value);
-         window.history.pushState({}, '', currentUrl.toString());
-      }}>
+      <Tabs value={currentTab} onValueChange={handleTabChange} className="w-full">
         <TabsList className="grid w-full grid-cols-2 md:w-1/2 mb-6 bg-muted p-1 rounded-lg">
           <TabsTrigger value="listings" className="py-2.5 data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm">
             <ListChecks className="mr-2 h-5 w-5" /> My Listings
