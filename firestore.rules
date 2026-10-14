@@ -9,9 +9,10 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Helper to check if a user is a participant of a specific conversation
-    // Handles both deterministic IDs (uid1_uid2) and legacy random IDs
-    function isConversationMember(convoId) {
+    // Comprehensive check for conversation membership
+    // 1. Checks if the deterministic ID contains the user's UID (fast, works for new chats in batches)
+    // 2. Checks if the document exists and the user is in the participantUids array (works for all chats)
+    function isMember(convoId) {
       return isSignedIn() && (
         (request.auth.uid in convoId.split('_')) || 
         (exists(/databases/$(database)/documents/conversations/$(convoId)) && 
@@ -19,43 +20,35 @@ service cloud.firestore {
       );
     }
 
-    // Users can read any public user profile.
-    // They can only create and update their own profile document.
+    // Users can read any profile, but only write their own.
     match /users/{userId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn() && request.auth.uid == userId;
     }
 
-    // Listings can be read by any authenticated user.
-    // Users can only create, update, or delete their own listings.
+    // Listings are public to read, but only owners can create/update.
     match /listings/{listingId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.auth.uid == request.resource.data.sellerId;
       allow update, delete: if isSignedIn() && request.auth.uid == resource.data.sellerId;
     }
 
-    // A user can create/read a conversation if they are a participant.
+    // Conversations logic
     match /conversations/{conversationId} {
-      // Allow creation if the user is in the participant list or the ID reflects their UID
+      // Allow creation if the user is a participant (either by ID or by field)
       allow create: if isSignedIn() && (
-        request.auth.uid in request.resource.data.participantUids ||
-        request.auth.uid in conversationId.split('_')
+        request.auth.uid in conversationId.split('_') ||
+        (request.resource.data.participantUids != null && request.auth.uid in request.resource.data.participantUids)
       );
       
-      // Allow read/update/delete if the user is a participant
-      allow read, update, delete: if isSignedIn() && (
-        request.auth.uid in conversationId.split('_') ||
-        (resource != null && request.auth.uid in resource.data.participantUids)
-      );
+      // Allow read/update if the user is a participant
+      allow read, update, delete: if isMember(conversationId);
 
       // Messages subcollection
       match /messages/{messageId} {
-        // Use the robust helper to verify membership for reading or listing messages
-        allow read: if isConversationMember(conversationId);
-        
-        // Allow creating messages if the user is the sender and a participant.
-        allow create: if isConversationMember(conversationId) && 
-          request.resource.data.senderId == request.auth.uid;
+        // Parent membership check covers both read and create
+        allow read: if isMember(conversationId);
+        allow create: if isMember(conversationId) && request.resource.data.senderId == request.auth.uid;
       }
     }
   }

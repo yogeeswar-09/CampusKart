@@ -275,15 +275,20 @@ function ChatPageContent() {
 
     const conversationDocRef = doc(db, "conversations", selectedChatId);
     const currentUnreadCount = currentConvo.unreadCount?.[receiverUid] || 0;
-    const conversationUpdateData = {
+    
+    // Correctly nested update data for unreadCount
+    const conversationUpdateData: any = {
       lastMessage: {
         text: messageText,
         senderId: currentUser.uid,
         timestamp: serverTimestamp(),
       },
       updatedAt: serverTimestamp(),
-      [`unreadCount.${receiverUid}`]: currentUnreadCount + 1,
-      [`unreadCount.${currentUser.uid}`]: 0,
+      unreadCount: {
+        ...(currentConvo.unreadCount || {}),
+        [receiverUid]: currentUnreadCount + 1,
+        [currentUser.uid]: 0,
+      }
     };
 
     const batch = writeBatch(db);
@@ -293,7 +298,7 @@ function ChatPageContent() {
     batch.commit().catch(async () => {
       const permissionError = new FirestorePermissionError({
         path: conversationDocRef.path,
-        operation: 'write',
+        operation: 'update',
         requestResourceData: { messageData, conversationUpdateData },
       });
       errorEmitter.emit('permission-error', permissionError);

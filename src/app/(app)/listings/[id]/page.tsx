@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useEffect, useState } from 'react';
@@ -108,7 +109,8 @@ export default function ListingDetailPage() {
         batch.set(newMessageRef, messageData);
 
         const convoSnap = await getDoc(conversationDocRef);
-        const currentUnreadCount = convoSnap.data()?.unreadCount?.[seller.uid] || 0;
+        const convoData = convoSnap.data();
+        const currentUnreadCount = convoData?.unreadCount?.[seller.uid] || 0;
 
         const conversationData: any = {
             participantUids: sortedUids,
@@ -118,8 +120,12 @@ export default function ListingDetailPage() {
                 timestamp: serverTimestamp(),
             },
             updatedAt: serverTimestamp(),
-            [`unreadCount.${seller.uid}`]: currentUnreadCount + 1,
-            [`unreadCount.${currentUser.uid}`]: 0,
+            unreadCount: {
+              ...(convoData?.unreadCount || {}),
+              [seller.uid]: currentUnreadCount + 1,
+              [currentUser.uid]: 0,
+            },
+            listingId: listing.id
         };
         
         if (!convoSnap.exists()) {
@@ -133,10 +139,10 @@ export default function ListingDetailPage() {
           setIsOfferDialogOpen(false);
           setOfferPrice('');
           router.push(`/chat?chatId=${conversationId}`);
-        }).catch(async () => {
+        }).catch(async (error) => {
           const permissionError = new FirestorePermissionError({
             path: conversationDocRef.path,
-            operation: 'write',
+            operation: convoSnap.exists() ? 'update' : 'create',
             requestResourceData: conversationData,
           });
           errorEmitter.emit('permission-error', permissionError);
