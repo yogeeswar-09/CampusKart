@@ -1,15 +1,13 @@
+
 "use client";
 
 import { Suspense, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UserInfoForm } from "@/components/profile/UserInfoForm";
-import { UserListings } from "@/components/profile/UserListings";
 import { ListingForm } from '@/components/listings/ListingForm';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Settings, ListChecks, Edit, Loader2, ShoppingBag, Package, CheckCircle } from 'lucide-react';
+import { Settings, Edit, Loader2, ShoppingBag, Package, CheckCircle } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { Skeleton } from '@/components/ui/skeleton';
 import { doc, getDoc, collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
@@ -23,8 +21,6 @@ interface UserStats {
 }
 
 function ProfilePageContent() {
-  const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
   const { user, isLoading: authLoading } = useAuth();
   
@@ -34,7 +30,6 @@ function ProfilePageContent() {
   const [userStats, setUserStats] = useState<UserStats>({ total: 0, available: 0, sold: 0 });
   const [isLoadingStats, setIsLoadingStats] = useState(true);
 
-  const currentTab = searchParams.get('tab') || "listings";
   const editListingId = searchParams.get('editListing');
   
   useEffect(() => {
@@ -109,13 +104,6 @@ function ProfilePageContent() {
     const names = name.split(' ');
     if (names.length === 1) return names[0].substring(0, 2).toUpperCase();
     return names[0][0].toUpperCase() + names[names.length - 1][0].toUpperCase();
-  };
-
-  const handleTabChange = (value: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete('editListing');
-    params.set('tab', value);
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   };
 
   if (authLoading) {
@@ -221,24 +209,13 @@ function ProfilePageContent() {
         </div>
       )}
 
-      <Tabs value={currentTab} onValueChange={handleTabChange} className="w-full">
-        <TabsList className="grid w-full grid-cols-2 md:w-1/2 mb-6 bg-muted p-1 rounded-lg">
-          <TabsTrigger value="listings" className="py-2.5 data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm">
-            <ListChecks className="mr-2 h-5 w-5" /> My Listings
-          </TabsTrigger>
-          <TabsTrigger value="settings" className="py-2.5 data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm">
-            <Settings className="mr-2 h-5 w-5" /> Account Settings
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="listings">
-          <UserListings />
-        </TabsContent>
-        <TabsContent value="settings">
-          <div className="max-w-2xl mx-auto">
-            <UserInfoForm />
-          </div>
-        </TabsContent>
-      </Tabs>
+      <div className="max-w-2xl mx-auto">
+        <div className="flex items-center gap-2 mb-6">
+          <Settings className="h-6 w-6 text-primary" />
+          <h2 className="text-2xl font-bold">Account Settings</h2>
+        </div>
+        <UserInfoForm />
+      </div>
     </div>
   );
 }
