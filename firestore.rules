@@ -9,10 +9,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isParticipant(conversationId, data) {
+    // Helper to check if a user is a participant of a specific conversation
+    function isConversationMember(convoId) {
+      let convo = get(/databases/$(database)/documents/conversations/$(convoId));
       return isSignedIn() && (
-        (request.auth.uid in conversationId.split('_')) || 
-        (data != null && data.keys().contains('participantUids') && request.auth.uid in data.participantUids)
+        (request.auth.uid in convoId.split('_')) || 
+        (convo != null && request.auth.uid in convo.data.participantUids)
       );
     }
 
@@ -33,8 +35,13 @@ service cloud.firestore {
 
     // A user can create/read a conversation if they are a participant.
     match /conversations/{conversationId} {
-      allow create: if isSignedIn() && request.auth.uid in request.resource.data.participantUids;
+      // Allow creation if the user is in the participant list or the ID reflects their UID
+      allow create: if isSignedIn() && (
+        request.auth.uid in request.resource.data.participantUids ||
+        request.auth.uid in conversationId.split('_')
+      );
       
+      // Allow read/update if the user is a participant
       allow read, update, delete: if isSignedIn() && (
         request.auth.uid in conversationId.split('_') ||
         request.auth.uid in resource.data.participantUids
@@ -42,20 +49,12 @@ service cloud.firestore {
 
       // Messages subcollection
       match /messages/{messageId} {
-        // Allow reading messages if the user is a participant. 
-        // For queries (list), the rules check the parent conversation document.
-        allow read: if isSignedIn() && (
-          (request.auth.uid in conversationId.split('_')) ||
-          (exists(/databases/$(database)/documents/conversations/$(conversationId)) && 
-           request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantUids)
-        );
+        // Use the robust helper to verify membership for reading or listing messages
+        allow read: if isConversationMember(conversationId);
         
         // Allow creating messages if the user is the sender and a participant.
-        allow create: if isSignedIn() && request.resource.data.senderId == request.auth.uid && (
-          (request.auth.uid in conversationId.split('_')) ||
-          (exists(/databases/$(database)/documents/conversations/$(conversationId)) && 
-           request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantUids)
-        );
+        allow create: if isConversationMember(conversationId) && 
+          request.resource.data.senderId == request.auth.uid;
       }
     }
   }
