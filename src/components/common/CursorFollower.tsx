@@ -2,8 +2,8 @@
 
 import { useEffect, useRef } from 'react';
 
-// The number of points in the trail, affecting its length.
-const TRAIL_LENGTH = 10;
+// Optimized trail length to improve performance
+const TRAIL_LENGTH = 5;
 
 // Base size of the trail.
 const POINT_SIZE = 4;
