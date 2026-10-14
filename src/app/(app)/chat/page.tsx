@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect, Suspense, useCallback } from 'react';
@@ -75,12 +74,12 @@ function ChatPageContent() {
     return user;
   }, [userCache]);
 
-  const handleSelectChat = (chatId: string) => {
+  const handleSelectChat = useCallback((chatId: string) => {
     setSelectedChatId(chatId);
     const newParams = new URLSearchParams(searchParams.toString());
     newParams.set('chatId', chatId);
     router.push(`${pathname}?${newParams.toString()}`, { scroll: false });
-  };
+  }, [pathname, router, searchParams]);
 
   useEffect(() => {
     if (!currentUser?.uid) {
@@ -118,26 +117,37 @@ function ChatPageContent() {
       // Deduplicate conversations by participants to handle legacy data and prevent "multiple chats"
       const uniqueConvosMap = new Map<string, ChatConversation>();
       resolvedConvos.forEach(convo => {
-        if (!convo.participantUids) return;
-        const sortedPair = [...convo.participantUids].sort().join('_');
-        const existing = uniqueConvosMap.get(sortedPair);
+        if (!convo.participantUids || convo.participantUids.length < 2) return;
         
-        // Prioritize the deterministic ID if it exists, otherwise keep the one with the latest update
-        const isDeterministicId = convo.id === sortedPair;
-        const existingIsDeterministicId = existing?.id === sortedPair;
+        const otherUid = convo.participantUids.find(uid => uid !== currentUser.uid);
+        if (!otherUid) return;
 
+        const existing = uniqueConvosMap.get(otherUid);
+        const sortedPair = [...convo.participantUids].sort().join('_');
+        
+        // Prioritize:
+        // 1. The deterministic ID if it matches the current document ID
+        // 2. The one with the most recent update
+        const isDeterministicId = convo.id === sortedPair;
+        
         if (!existing) {
-          uniqueConvosMap.set(sortedPair, convo);
-        } else if (isDeterministicId && !existingIsDeterministicId) {
-          uniqueConvosMap.set(sortedPair, convo);
-        } else if (isDeterministicId === existingIsDeterministicId) {
-          if (new Date(convo.updatedAt as string) > new Date(existing.updatedAt as string)) {
-            uniqueConvosMap.set(sortedPair, convo);
+          uniqueConvosMap.set(otherUid, convo);
+        } else {
+          const existingIsDeterministic = existing.id === sortedPair;
+          if (isDeterministicId && !existingIsDeterministic) {
+            uniqueConvosMap.set(otherUid, convo);
+          } else if (isDeterministicId === existingIsDeterministic) {
+            if (new Date(convo.updatedAt as string) > new Date(existing.updatedAt as string)) {
+              uniqueConvosMap.set(otherUid, convo);
+            }
           }
         }
       });
 
-      const uniqueConvos = Array.from(uniqueConvosMap.values());
+      const uniqueConvos = Array.from(uniqueConvosMap.values()).sort((a, b) => 
+        new Date(b.updatedAt as string).getTime() - new Date(a.updatedAt as string).getTime()
+      );
+      
       setConversations(uniqueConvos);
       setIsLoadingConversations(false);
     }, (error) => {
@@ -166,7 +176,29 @@ function ChatPageContent() {
         const conversationId = sortedUids.join('_');
         const conversationDocRef = doc(db, "conversations", conversationId);
         
-        const docSnap = await getDoc(conversationDocRef).catch(async (error) => {
+        try {
+            const docSnap = await getDoc(conversationDocRef);
+            
+            if (!docSnap.exists()) {
+                const otherUser = await getCachedUserDetails(newChatWithUserId);
+                if (otherUser) {
+                    const newConvoData = {
+                        participantUids: sortedUids,
+                        lastMessage: null,
+                        unreadCount: { [currentUser.uid]: 0, [newChatWithUserId]: 0 },
+                        createdAt: serverTimestamp(),
+                        updatedAt: serverTimestamp(),
+                    };
+                    await setDoc(conversationDocRef, newConvoData);
+                }
+            }
+
+            const newParams = new URLSearchParams(searchParams.toString());
+            newParams.delete('newChatWith');
+            newParams.delete('itemId');
+            newParams.set('chatId', conversationId);
+            router.replace(`${pathname}?${newParams.toString()}`);
+        } catch (error: any) {
             if (error.code === 'permission-denied') {
                 const permissionError = new FirestorePermissionError({
                     path: conversationDocRef.path,
@@ -174,39 +206,10 @@ function ChatPageContent() {
                 });
                 errorEmitter.emit('permission-error', permissionError);
             }
-            throw error;
-        });
-        
-        if (!docSnap.exists()) {
-            const otherUser = await getCachedUserDetails(newChatWithUserId);
-            if (otherUser) {
-                const newConvoData = {
-                    participantUids: sortedUids,
-                    lastMessage: null,
-                    unreadCount: { [currentUser.uid]: 0, [newChatWithUserId]: 0 },
-                    createdAt: serverTimestamp(),
-                    updatedAt: serverTimestamp(),
-                };
-                setDoc(conversationDocRef, newConvoData)
-                  .catch(async () => {
-                    const permissionError = new FirestorePermissionError({
-                      path: conversationDocRef.path,
-                      operation: 'create',
-                      requestResourceData: newConvoData,
-                    });
-                    errorEmitter.emit('permission-error', permissionError);
-                  });
-            }
         }
-
-        const newParams = new URLSearchParams(searchParams.toString());
-        newParams.delete('newChatWith');
-        newParams.delete('itemId');
-        newParams.set('chatId', conversationId);
-        router.replace(`${pathname}?${newParams.toString()}`);
     };
     
-    findOrCreateChat().catch(() => {}); // Errors handled inside
+    findOrCreateChat();
   }, [searchParams, currentUser, router, pathname, getCachedUserDetails]);
 
   useEffect(() => {
@@ -307,11 +310,8 @@ function ChatPageContent() {
         timestamp: serverTimestamp(),
       },
       updatedAt: serverTimestamp(),
-      unreadCount: {
-        ...(currentConvo.unreadCount || {}),
-        [receiverUid]: currentUnreadCount + 1,
-        [currentUser.uid]: 0,
-      }
+      [`unreadCount.${receiverUid}`]: currentUnreadCount + 1,
+      [`unreadCount.${currentUser.uid}`]: 0,
     };
 
     const batch = writeBatch(db);
@@ -322,7 +322,7 @@ function ChatPageContent() {
       if (error.code === 'permission-denied') {
           const permissionError = new FirestorePermissionError({
             path: conversationDocRef.path,
-            operation: 'update',
+            operation: 'write',
             requestResourceData: { messageData, conversationUpdateData },
           });
           errorEmitter.emit('permission-error', permissionError);
