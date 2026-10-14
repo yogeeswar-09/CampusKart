@@ -69,6 +69,13 @@ function ChatPageContent() {
     return user;
   }, [userCache]);
 
+  const handleSelectChat = (chatId: string) => {
+    setSelectedChatId(chatId);
+    const newParams = new URLSearchParams(searchParams.toString());
+    newParams.set('chatId', chatId);
+    router.push(`${pathname}?${newParams.toString()}`, { scroll: false });
+  };
+
   useEffect(() => {
     if (!currentUser?.uid) {
       if (!authLoading) setIsLoadingConversations(false);
