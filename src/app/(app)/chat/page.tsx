@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, Suspense, useCallback } from 'react';
@@ -83,7 +84,7 @@ function ChatPageContent() {
     const unsubscribe = onSnapshot(q, async (querySnapshot) => {
       const convosPromises = querySnapshot.docs.map(async (docSnap) => {
         const data = docSnap.data();
-        const otherUid = data.participantUids.find((uid: string) => uid !== currentUser.uid);
+        const otherUid = data.participantUids?.find((uid: string) => uid !== currentUser.uid);
         const otherUserDetails = otherUid ? await getCachedUserDetails(otherUid) : null;
 
         return {
@@ -102,14 +103,19 @@ function ChatPageContent() {
       const resolvedConvos = await Promise.all(convosPromises);
       
       // Filter out duplicate conversations between the same users
-      const uniqueConvos = resolvedConvos.reduce((acc, current) => {
-        const sortedPair = [...current.participantUids].sort().join('_');
-        if (!acc.find(item => [...item.participantUids].sort().join('_') === sortedPair)) {
-          acc.push(current);
+      const uniqueConvosMap = new Map<string, ChatConversation>();
+      resolvedConvos.forEach(convo => {
+        if (!convo.participantUids) return;
+        const sortedPair = [...convo.participantUids].sort().join('_');
+        const existing = uniqueConvosMap.get(sortedPair);
+        
+        // Keep the one with the most recent updatedAt
+        if (!existing || new Date(convo.updatedAt as string) > new Date(existing.updatedAt as string)) {
+          uniqueConvosMap.set(sortedPair, convo);
         }
-        return acc;
-      }, [] as ChatConversation[]);
+      });
 
+      const uniqueConvos = Array.from(uniqueConvosMap.values());
       setConversations(uniqueConvos);
       setIsLoadingConversations(false);
     }, (error) => {
@@ -122,7 +128,7 @@ function ChatPageContent() {
     });
 
     return () => unsubscribe();
-  }, [currentUser, authLoading, toast, getCachedUserDetails]);
+  }, [currentUser, authLoading, getCachedUserDetails]);
 
   useEffect(() => {
     const newChatWithUserId = searchParams.get('newChatWith');
@@ -211,12 +217,13 @@ function ChatPageContent() {
       
       const currentConvoDetails = conversations.find(c => c.id === selectedChatId);
       if (currentConvoDetails && (currentConvoDetails.unreadCount?.[currentUser.uid] || 0) > 0) {
-        updateDoc(doc(db, "conversations", selectedChatId), { [`unreadCount.${currentUser.uid}`]: 0 })
+        const updateData = { [`unreadCount.${currentUser.uid}`]: 0 };
+        updateDoc(doc(db, "conversations", selectedChatId), updateData)
           .catch(async () => {
             const permissionError = new FirestorePermissionError({
               path: `conversations/${selectedChatId}`,
               operation: 'update',
-              requestResourceData: { [`unreadCount.${currentUser.uid}`]: 0 },
+              requestResourceData: updateData,
             });
             errorEmitter.emit('permission-error', permissionError);
           });
@@ -240,13 +247,6 @@ function ChatPageContent() {
 
     return () => unsubscribe();
   }, [selectedChatId, currentUser?.uid, conversations]);
-
-  const handleSelectChat = (chatId: string) => {
-    setSelectedChatId(chatId);
-    const newParams = new URLSearchParams(searchParams.toString());
-    newParams.set('chatId', chatId);
-    router.push(`${pathname}?${newParams.toString()}`, { scroll: false });
-  };
 
   const handleSendMessage = async (messageText: string) => {
     if (!currentUser?.uid || !selectedChatId) return;
