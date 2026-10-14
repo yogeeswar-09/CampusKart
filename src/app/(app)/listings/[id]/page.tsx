@@ -73,11 +73,19 @@ export default function ListingDetailPage() {
           }
         }
       } catch (error: any) {
-        toast({
-          title: "Error Loading Item",
-          description: "Could not load item details.",
-          variant: "destructive",
-        });
+        if (error.code === 'permission-denied') {
+          const permissionError = new FirestorePermissionError({
+            path: `listings/${id}`,
+            operation: 'get',
+          });
+          errorEmitter.emit('permission-error', permissionError);
+        } else {
+          toast({
+            title: "Error Loading Item",
+            description: "Could not load item details.",
+            variant: "destructive",
+          });
+        }
       } finally {
         setIsLoading(false);
       }
@@ -97,18 +105,17 @@ export default function ListingDetailPage() {
     const conversationDocRef = doc(db, "conversations", conversationId);
 
     try {
-        const batch = writeBatch(db);
-        const newMessageRef = doc(collection(db, "conversations", conversationId, "messages"));
-        const messageData = {
-            senderId: currentUser.uid,
-            receiverId: seller.uid,
-            text: offerMessage,
-            timestamp: serverTimestamp(),
-            isRead: false,
-        };
-        batch.set(newMessageRef, messageData);
+        const convoSnap = await getDoc(conversationDocRef).catch(async (error) => {
+            if (error.code === 'permission-denied') {
+                const permissionError = new FirestorePermissionError({
+                    path: conversationDocRef.path,
+                    operation: 'get',
+                });
+                errorEmitter.emit('permission-error', permissionError);
+            }
+            throw error;
+        });
 
-        const convoSnap = await getDoc(conversationDocRef);
         const convoData = convoSnap.data();
         const currentUnreadCount = convoData?.unreadCount?.[seller.uid] || 0;
 
@@ -132,6 +139,17 @@ export default function ListingDetailPage() {
             conversationData.createdAt = serverTimestamp();
         }
 
+        const batch = writeBatch(db);
+        const newMessageRef = doc(collection(db, "conversations", conversationId, "messages"));
+        const messageData = {
+            senderId: currentUser.uid,
+            receiverId: seller.uid,
+            text: offerMessage,
+            timestamp: serverTimestamp(),
+            isRead: false,
+        };
+        
+        batch.set(newMessageRef, messageData);
         batch.set(conversationDocRef, conversationData, { merge: true });
         
         batch.commit().then(() => {
@@ -143,13 +161,15 @@ export default function ListingDetailPage() {
           const permissionError = new FirestorePermissionError({
             path: conversationDocRef.path,
             operation: convoSnap.exists() ? 'update' : 'create',
-            requestResourceData: conversationData,
+            requestResourceData: { conversationData, messageData },
           });
           errorEmitter.emit('permission-error', permissionError);
         });
 
     } catch (error: any) {
-        toast({ title: "Failed to Send Offer", description: "An unexpected error occurred.", variant: "destructive" });
+        if (error.code !== 'permission-denied') {
+            toast({ title: "Failed to Send Offer", description: "An unexpected error occurred.", variant: "destructive" });
+        }
     } finally {
         setIsSendingOffer(false);
     }

@@ -37,8 +37,14 @@ const fetchUserDetails = async (uid: string): Promise<User | null> => {
       return { uid: userDocSnap.id, ...userDocSnap.data() } as User;
     }
     return null;
-  } catch (error) {
-    console.error("Error fetching user details:", error);
+  } catch (error: any) {
+    if (error.code === 'permission-denied') {
+        const permissionError = new FirestorePermissionError({
+            path: `users/${uid}`,
+            operation: 'get',
+        });
+        errorEmitter.emit('permission-error', permissionError);
+    }
     return null;
   }
 };
@@ -109,14 +115,12 @@ function ChatPageContent() {
 
       const resolvedConvos = await Promise.all(convosPromises);
       
-      // Filter out duplicate conversations between the same users
       const uniqueConvosMap = new Map<string, ChatConversation>();
       resolvedConvos.forEach(convo => {
         if (!convo.participantUids) return;
         const sortedPair = [...convo.participantUids].sort().join('_');
         const existing = uniqueConvosMap.get(sortedPair);
         
-        // Keep the one with the most recent updatedAt
         if (!existing || new Date(convo.updatedAt as string) > new Date(existing.updatedAt as string)) {
           uniqueConvosMap.set(sortedPair, convo);
         }
@@ -151,7 +155,16 @@ function ChatPageContent() {
         const conversationId = sortedUids.join('_');
         const conversationDocRef = doc(db, "conversations", conversationId);
         
-        const docSnap = await getDoc(conversationDocRef);
+        const docSnap = await getDoc(conversationDocRef).catch(async (error) => {
+            if (error.code === 'permission-denied') {
+                const permissionError = new FirestorePermissionError({
+                    path: conversationDocRef.path,
+                    operation: 'get',
+                });
+                errorEmitter.emit('permission-error', permissionError);
+            }
+            throw error;
+        });
         
         if (!docSnap.exists()) {
             const otherUser = await getCachedUserDetails(newChatWithUserId);
@@ -182,7 +195,7 @@ function ChatPageContent() {
         router.replace(`${pathname}?${newParams.toString()}`);
     };
     
-    findOrCreateChat();
+    findOrCreateChat().catch(() => {}); // Errors handled inside
   }, [searchParams, currentUser, router, pathname, getCachedUserDetails]);
 
   useEffect(() => {
@@ -276,7 +289,6 @@ function ChatPageContent() {
     const conversationDocRef = doc(db, "conversations", selectedChatId);
     const currentUnreadCount = currentConvo.unreadCount?.[receiverUid] || 0;
     
-    // Correctly nested update data for unreadCount
     const conversationUpdateData: any = {
       lastMessage: {
         text: messageText,
@@ -295,13 +307,15 @@ function ChatPageContent() {
     batch.set(newMessageRef, messageData);
     batch.update(conversationDocRef, conversationUpdateData);
 
-    batch.commit().catch(async () => {
-      const permissionError = new FirestorePermissionError({
-        path: conversationDocRef.path,
-        operation: 'update',
-        requestResourceData: { messageData, conversationUpdateData },
-      });
-      errorEmitter.emit('permission-error', permissionError);
+    batch.commit().catch(async (error) => {
+      if (error.code === 'permission-denied') {
+          const permissionError = new FirestorePermissionError({
+            path: conversationDocRef.path,
+            operation: 'update',
+            requestResourceData: { messageData, conversationUpdateData },
+          });
+          errorEmitter.emit('permission-error', permissionError);
+      }
     });
   };
   
