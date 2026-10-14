@@ -115,14 +115,25 @@ function ChatPageContent() {
 
       const resolvedConvos = await Promise.all(convosPromises);
       
+      // Deduplicate conversations by participants to handle legacy data and prevent "multiple chats"
       const uniqueConvosMap = new Map<string, ChatConversation>();
       resolvedConvos.forEach(convo => {
         if (!convo.participantUids) return;
         const sortedPair = [...convo.participantUids].sort().join('_');
         const existing = uniqueConvosMap.get(sortedPair);
         
-        if (!existing || new Date(convo.updatedAt as string) > new Date(existing.updatedAt as string)) {
+        // Prioritize the deterministic ID if it exists, otherwise keep the one with the latest update
+        const isDeterministicId = convo.id === sortedPair;
+        const existingIsDeterministicId = existing?.id === sortedPair;
+
+        if (!existing) {
           uniqueConvosMap.set(sortedPair, convo);
+        } else if (isDeterministicId && !existingIsDeterministicId) {
+          uniqueConvosMap.set(sortedPair, convo);
+        } else if (isDeterministicId === existingIsDeterministicId) {
+          if (new Date(convo.updatedAt as string) > new Date(existing.updatedAt as string)) {
+            uniqueConvosMap.set(sortedPair, convo);
+          }
         }
       });
 

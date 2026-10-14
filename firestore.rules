@@ -10,13 +10,12 @@ service cloud.firestore {
     }
 
     // Comprehensive check for conversation membership
-    // 1. Checks if the deterministic ID contains the user's UID (fast, works for new chats in batches)
-    // 2. Checks if the document exists and the user is in the participantUids array (works for all chats)
-    function isMember(convoId) {
+    // This function is designed to handle both deterministic IDs (uid1_uid2) 
+    // and legacy random IDs by checking the participantUids array.
+    function isMember(convoId, convoData) {
       return isSignedIn() && (
         (request.auth.uid in convoId.split('_')) || 
-        (exists(/databases/$(database)/documents/conversations/$(convoId)) && 
-         request.auth.uid in get(/databases/$(database)/documents/conversations/$(convoId)).data.participantUids)
+        (convoData != null && request.auth.uid in convoData.participantUids)
       );
     }
 
@@ -41,14 +40,36 @@ service cloud.firestore {
         (request.resource.data.participantUids != null && request.auth.uid in request.resource.data.participantUids)
       );
       
-      // Allow read/update if the user is a participant
-      allow read, update, delete: if isMember(conversationId);
+      // Allow get (single doc) if member or in ID (to check existence before creation)
+      allow get: if isSignedIn() && (
+        (request.auth.uid in conversationId.split('_')) ||
+        (resource != null && request.auth.uid in resource.data.participantUids) ||
+        (exists(/databases/$(database)/documents/conversations/$(conversationId)) && 
+         request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantUids)
+      );
+
+      // Allow list (queries) if member of the document
+      allow list: if isSignedIn() && request.auth.uid in resource.data.participantUids;
+
+      // Allow update/delete if member
+      allow update, delete: if isSignedIn() && (
+        (request.auth.uid in conversationId.split('_')) ||
+        (resource != null && request.auth.uid in resource.data.participantUids)
+      );
 
       // Messages subcollection
       match /messages/{messageId} {
-        // Parent membership check covers both read and create
-        allow read: if isMember(conversationId);
-        allow create: if isMember(conversationId) && request.resource.data.senderId == request.auth.uid;
+        // We use isMember but need to check the parent existence or use resource for existing
+        allow read: if isSignedIn() && (
+          (request.auth.uid in conversationId.split('_')) || 
+          (get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantUids != null && 
+           request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantUids)
+        );
+        allow create: if isSignedIn() && (
+          (request.auth.uid in conversationId.split('_') || 
+           request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantUids) && 
+          request.resource.data.senderId == request.auth.uid
+        );
       }
     }
   }
