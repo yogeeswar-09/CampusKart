@@ -13,13 +13,13 @@ import { useAuth } from '@/hooks/use-auth';
 import { Loader2, AlertTriangle, Camera } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ChangeEvent, useState, useEffect } from 'react';
-import type { User as AppUser, UserYear } from '@/types';
-import { userYears } from '@/types'; 
-// import Image from 'next/image'; // Not directly used for preview, AvatarImage handles it
+import type { User as AppUser, UserYear, UserBranch } from '@/types';
+import { userYears, userBranches } from '@/types';
 
 const profileSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters.").max(50, "Name is too long."),
   year: z.enum(userYears, { required_error: "Please select your year of study." }),
+  branch: z.enum(userBranches, { required_error: "Please select your branch." }),
   phone: z.string().optional().refine(val => !val || /^\d{10,15}$/.test(val), {
     message: "Invalid phone number (10-15 digits, or leave blank)."
   }).transform(val => val || ""), 
@@ -67,6 +67,7 @@ export function UserInfoForm() {
     defaultValues: {
       name: '',
       year: undefined,
+      branch: undefined,
       phone: '',
       avatarUrl: '',
     },
@@ -77,6 +78,7 @@ export function UserInfoForm() {
       form.reset({
         name: user.name || '',
         year: user.year || undefined,
+        branch: user.branch || undefined,
         phone: user.contactInfo?.phone || '',
         avatarUrl: user.avatarUrl || '', 
       });
@@ -139,12 +141,12 @@ export function UserInfoForm() {
     } else if (data.avatarUrl === user.avatarUrl) {
       finalAvatarUrlForUpdate = undefined; // Indicates no change from current
     }
-    // If data.avatarUrl is a new URL, finalAvatarUrlForUpdate will hold it.
 
     try {
       const updatePayload: Partial<AppUser> = {
         name: data.name,
         year: data.year,
+        branch: data.branch,
         contactInfo: { phone: data.phone || undefined }, 
         avatarUrl: finalAvatarUrlForUpdate, 
       };
@@ -154,7 +156,6 @@ export function UserInfoForm() {
 
     } catch (error: any) {
         console.error("Failed to update profile:", error);
-        // Toast is handled by updateUserProfile in AuthContext
     } finally {
         setFormLoading(false);
     }
@@ -175,7 +176,7 @@ export function UserInfoForm() {
     <Card>
       <CardHeader>
         <CardTitle>Profile Information</CardTitle>
-        <CardDescription>Update your personal details. Your MLRIT email ({user.email}) and branch ({user.branch || 'Not set'}) cannot be changed here.</CardDescription>
+        <CardDescription>Update your personal details. Your MLRIT email ({user.email}) cannot be changed here.</CardDescription>
       </CardHeader>
       <CardContent>
         {!isCloudinaryConfigured && (
@@ -280,11 +281,32 @@ export function UserInfoForm() {
                   </FormItem>
                 )}
               />
-              <FormItem>
-                <FormLabel>Branch</FormLabel>
-                <Input value={user.branch || 'Not set'} disabled className="bg-muted/50 cursor-not-allowed" />
-                <FormDescription>Your branch (set at signup).</FormDescription>
-              </FormItem>
+               <FormField
+                control={form.control}
+                name="branch"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Branch</FormLabel>
+                    <Select 
+                      onValueChange={field.onChange} 
+                      value={field.value} 
+                      disabled={formLoading}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select your branch" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {userBranches.map(branchValue => (
+                          <SelectItem key={branchValue} value={branchValue}>{branchValue}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
 
 
