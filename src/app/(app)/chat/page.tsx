@@ -114,7 +114,9 @@ function ChatPageContent() {
 
       const resolvedConvos = await Promise.all(convosPromises);
       
-      // Deduplicate conversations: prioritize deterministic IDs and latest activity
+      // DEDUPLICATION LOGIC:
+      // Group conversations by the other participant's UID.
+      // If multiple exist, prioritize the deterministic ID (sortedUids.join('_')) or the latest activity.
       const uniqueConvosMap = new Map<string, ChatConversation>();
       resolvedConvos.forEach(convo => {
         if (!convo.participantUids || convo.participantUids.length < 2) return;
@@ -123,16 +125,17 @@ function ChatPageContent() {
         if (!otherUid) return;
 
         const existing = uniqueConvosMap.get(otherUid);
-        const sortedPair = [...convo.participantUids].sort().join('_');
-        const isDeterministicId = convo.id === sortedPair;
+        const deterministicId = [...convo.participantUids].sort().join('_');
+        const isDeterministic = convo.id === deterministicId;
         
         if (!existing) {
           uniqueConvosMap.set(otherUid, convo);
         } else {
-          const existingIsDeterministic = existing.id === sortedPair;
-          if (isDeterministicId && !existingIsDeterministic) {
+          const existingIsDeterministic = existing.id === deterministicId;
+          // Priority: 1. Deterministic ID, 2. Latest updatedAt
+          if (isDeterministic && !existingIsDeterministic) {
             uniqueConvosMap.set(otherUid, convo);
-          } else if (isDeterministicId === existingIsDeterministic) {
+          } else if (isDeterministic === existingIsDeterministic) {
             const convoDate = new Date(convo.updatedAt as string).getTime();
             const existingDate = new Date(existing.updatedAt as string).getTime();
             if (convoDate > existingDate) {
@@ -142,11 +145,11 @@ function ChatPageContent() {
         }
       });
 
-      const uniqueConvos = Array.from(uniqueConvosMap.values()).sort((a, b) => 
+      const sortedUniqueConvos = Array.from(uniqueConvosMap.values()).sort((a, b) => 
         new Date(b.updatedAt as string).getTime() - new Date(a.updatedAt as string).getTime()
       );
       
-      setConversations(uniqueConvos);
+      setConversations(sortedUniqueConvos);
       setIsLoadingConversations(false);
     }, (error) => {
       if (error.code === 'permission-denied') {
@@ -172,8 +175,7 @@ function ChatPageContent() {
             return;
         }
         
-        // 1. Check if we already have a conversation with this user in our loaded list
-        // This handles cases where a legacy chat already exists.
+        // 1. Check existing conversations for any thread with this user (legacy or deterministic)
         const existingConvo = conversations.find(c => 
             c.participantUids.includes(newChatWithUserId)
         );
@@ -187,31 +189,16 @@ function ChatPageContent() {
             return;
         }
         
-        // 2. If not found in loaded list, try to see if the deterministic ID exists
+        // 2. If no existing chat found, try the deterministic ID
         const sortedUids = [currentUser.uid, newChatWithUserId].sort();
         const conversationId = sortedUids.join('_');
-        const conversationDocRef = doc(db, "conversations", conversationId);
         
-        try {
-            const convoSnap = await getDoc(conversationDocRef).catch(async (error) => {
-              if (error.code === 'permission-denied') {
-                  const permissionError = new FirestorePermissionError({
-                      path: conversationDocRef.path,
-                      operation: 'get',
-                  });
-                  errorEmitter.emit('permission-error', permissionError);
-              }
-              throw error;
-            });
-
-            const newParams = new URLSearchParams(searchParams.toString());
-            newParams.delete('newChatWith');
-            newParams.delete('itemId');
-            newParams.set('chatId', conversationId);
-            router.replace(`${pathname}?${newParams.toString()}`);
-        } catch (error) {
-            // Error handled by emission logic
-        }
+        // We just redirect to the ID. If it doesn't exist, the UI will show empty and the first message will create it.
+        const newParams = new URLSearchParams(searchParams.toString());
+        newParams.delete('newChatWith');
+        newParams.delete('itemId');
+        newParams.set('chatId', conversationId);
+        router.replace(`${pathname}?${newParams.toString()}`);
     };
     
     findOrCreateChat();
@@ -226,11 +213,14 @@ function ChatPageContent() {
         if (selectedChatId !== chatIdFromUrl) {
           setSelectedChatId(chatIdFromUrl);
         }
+      } else if (chatIdFromUrl.includes(currentUser?.uid || '')) {
+          // If it's a deterministic ID involving the user, allow selection even if not in list yet
+          setSelectedChatId(chatIdFromUrl);
       }
     } else if (conversations.length > 0 && !selectedChatId) {
       setSelectedChatId(conversations[0].id);
     }
-  }, [conversations, isLoadingConversations, searchParams, selectedChatId]);
+  }, [conversations, isLoadingConversations, searchParams, selectedChatId, currentUser]);
 
   useEffect(() => {
     if (!selectedChatId || !currentUser?.uid) {
@@ -256,17 +246,17 @@ function ChatPageContent() {
       
       const currentConvoDetails = conversations.find(c => c.id === selectedChatId);
       if (currentConvoDetails && (currentConvoDetails.unreadCount?.[currentUser.uid] || 0) > 0) {
-        const unreadCountUpdate = {
+        const updatedUnreadCount = {
           ...currentConvoDetails.unreadCount,
           [currentUser.uid]: 0
         };
-        updateDoc(doc(db, "conversations", selectedChatId), { unreadCount: unreadCountUpdate })
+        updateDoc(doc(db, "conversations", selectedChatId), { unreadCount: updatedUnreadCount })
           .catch(async (error: any) => {
             if (error.code === 'permission-denied') {
               const permissionError = new FirestorePermissionError({
                 path: `conversations/${selectedChatId}`,
                 operation: 'update',
-                requestResourceData: { unreadCount: unreadCountUpdate },
+                requestResourceData: { unreadCount: updatedUnreadCount },
               });
               errorEmitter.emit('permission-error', permissionError);
             }
@@ -283,25 +273,38 @@ function ChatPageContent() {
       setIsLoadingMessages(false);
     });
     
-    const currentConvo = conversations.find(c => c.id === selectedChatId);
-    if (currentConvo) {
-        const otherParticipant = currentConvo.participants?.find(p => p.uid !== currentUser.uid);
-        if (otherParticipant) {
-            setOtherParticipantDetails(otherParticipant);
+    // Resolve other participant details for the header
+    const findOtherUid = () => {
+        const currentConvo = conversations.find(c => c.id === selectedChatId);
+        if (currentConvo) return currentConvo.participantUids.find(uid => uid !== currentUser.uid);
+        if (selectedChatId.includes('_')) {
+            const parts = selectedChatId.split('_');
+            return parts.find(p => p !== currentUser.uid);
         }
+        return null;
+    };
+
+    const otherUid = findOtherUid();
+    if (otherUid) {
+        getCachedUserDetails(otherUid).then(setOtherParticipantDetails);
     }
 
     return () => unsubscribe();
-  }, [selectedChatId, currentUser?.uid, conversations]);
+  }, [selectedChatId, currentUser?.uid, conversations, getCachedUserDetails]);
 
   const handleSendMessage = async (messageText: string) => {
     if (!currentUser?.uid || !selectedChatId) return;
 
-    const currentConvo = conversations.find(c => c.id === selectedChatId);
-    const receiverUid = currentConvo 
-      ? currentConvo.participantUids.find(uid => uid !== currentUser.uid)
-      : selectedChatId.indexOf('_') !== -1 ? selectedChatId.split('_').find(uid => uid !== currentUser.uid) : null;
+    const findReceiverUid = () => {
+        const currentConvo = conversations.find(c => c.id === selectedChatId);
+        if (currentConvo) return currentConvo.participantUids.find(uid => uid !== currentUser.uid);
+        if (selectedChatId.includes('_')) {
+            return selectedChatId.split('_').find(uid => uid !== currentUser.uid);
+        }
+        return null;
+    };
 
+    const receiverUid = findReceiverUid();
     if (!receiverUid) return;
     
     const conversationDocRef = doc(db, "conversations", selectedChatId);
@@ -315,6 +318,7 @@ function ChatPageContent() {
       isRead: false,
     };
 
+    const currentConvo = conversations.find(c => c.id === selectedChatId);
     const currentUnreadCount = currentConvo?.unreadCount?.[receiverUid] || 0;
     
     const conversationUpdateData: any = {
@@ -331,6 +335,10 @@ function ChatPageContent() {
         [currentUser.uid]: 0,
       }
     };
+
+    if (!currentConvo) {
+        conversationUpdateData.createdAt = serverTimestamp();
+    }
 
     const batch = writeBatch(db);
     batch.set(newMessageRef, messageData);

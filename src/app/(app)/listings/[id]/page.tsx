@@ -13,7 +13,7 @@ import { Edit3, Loader2, AlertTriangle, ShoppingBag, HandCoins, MessageCircle } 
 import { useAuth } from '@/hooks/use-auth';
 import Link from 'next/link';
 import { Skeleton } from '@/components/ui/skeleton';
-import { doc, getDoc, Timestamp, collection, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, Timestamp, collection, serverTimestamp, writeBatch, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { formatDistanceToNow } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
@@ -101,26 +101,34 @@ export default function ListingDetailPage() {
     setIsSendingOffer(true);
     const offerPriceNum = parseFloat(offerPrice);
     const offerMessage = `Hi! I would like to make an offer of ₹${offerPriceNum.toFixed(2)} for your item: "${listing.title}".`;
+    
+    // 1. Search for an EXISTING conversation first to avoid duplicates
     const sortedUids = [currentUser.uid, seller.uid].sort();
-    const conversationId = sortedUids.join('_');
-    const conversationDocRef = doc(db, "conversations", conversationId);
+    const deterministicId = sortedUids.join('_');
+    
+    let targetConversationId = deterministicId;
 
     try {
-        const convoSnap = await getDoc(conversationDocRef).catch(async (error) => {
-            if (error.code === 'permission-denied') {
-                const permissionError = new FirestorePermissionError({
-                    path: conversationDocRef.path,
-                    operation: 'get',
-                });
-                errorEmitter.emit('permission-error', permissionError);
-            }
-            throw error;
+        const q = query(
+            collection(db, "conversations"),
+            where("participantUids", "array-contains", currentUser.uid)
+        );
+        const querySnapshot = await getDocs(q);
+        const existingConvo = querySnapshot.docs.find(doc => {
+            const data = doc.data();
+            return data.participantUids?.includes(seller.uid);
         });
 
+        if (existingConvo) {
+            targetConversationId = existingConvo.id;
+        }
+
+        const conversationDocRef = doc(db, "conversations", targetConversationId);
+        const convoSnap = await getDoc(conversationDocRef);
         const convoData = convoSnap.data();
         const currentUnreadCount = convoData?.unreadCount?.[seller.uid] || 0;
 
-        const conversationData: any = {
+        const conversationUpdateData: any = {
             participantUids: sortedUids,
             lastMessage: {
                 text: offerMessage,
@@ -137,11 +145,11 @@ export default function ListingDetailPage() {
         };
         
         if (!convoSnap.exists()) {
-            conversationData.createdAt = serverTimestamp();
+            conversationUpdateData.createdAt = serverTimestamp();
         }
 
         const batch = writeBatch(db);
-        const newMessageRef = doc(collection(db, "conversations", conversationId, "messages"));
+        const newMessageRef = doc(collection(db, "conversations", targetConversationId, "messages"));
         const messageData = {
             senderId: currentUser.uid,
             receiverId: seller.uid,
@@ -151,27 +159,24 @@ export default function ListingDetailPage() {
         };
         
         batch.set(newMessageRef, messageData);
-        batch.set(conversationDocRef, conversationData, { merge: true });
+        batch.set(conversationDocRef, conversationUpdateData, { merge: true });
         
-        batch.commit().then(() => {
-          toast({ title: "Offer Sent!", description: "Your offer has been sent to the seller." });
-          setIsOfferDialogOpen(false);
-          setOfferPrice('');
-          router.push(`/chat?chatId=${conversationId}`);
-        }).catch(async (error) => {
-          if (error.code === 'permission-denied') {
-            const permissionError = new FirestorePermissionError({
-              path: conversationDocRef.path,
-              operation: convoSnap.exists() ? 'update' : 'create',
-              requestResourceData: { conversationData, messageData },
-            });
-            errorEmitter.emit('permission-error', permissionError);
-          }
-        });
+        await batch.commit();
+        
+        toast({ title: "Offer Sent!", description: "Your offer has been sent to the seller." });
+        setIsOfferDialogOpen(false);
+        setOfferPrice('');
+        router.push(`/chat?chatId=${targetConversationId}`);
 
     } catch (error: any) {
-        if (error.code !== 'permission-denied') {
-            toast({ title: "Failed to Send Offer", description: "An unexpected error occurred.", variant: "destructive" });
+        if (error.code === 'permission-denied') {
+            const permissionError = new FirestorePermissionError({
+                path: `conversations/${targetConversationId}`,
+                operation: 'write',
+            });
+            errorEmitter.emit('permission-error', permissionError);
+        } else {
+            toast({ title: "Failed to Send Offer", description: error.message || "An unexpected error occurred.", variant: "destructive" });
         }
     } finally {
         setIsSendingOffer(false);
