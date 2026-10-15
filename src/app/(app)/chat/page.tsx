@@ -181,7 +181,7 @@ function ChatPageContent() {
         const conversationDocRef = doc(db, "conversations", conversationId);
         
         try {
-            // Check for existence. The rules now allow 'get' if your UID is part of the ID.
+            // Check for existence.
             await getDoc(conversationDocRef).catch(async (error) => {
               if (error.code === 'permission-denied') {
                   const permissionError = new FirestorePermissionError({

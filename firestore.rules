@@ -1,21 +1,13 @@
 
 rules_version = '2';
 
-// Last Sync: 2024-05-25 11:30 AM (Fixing 'get denied' and membership checks)
+// Last Sync: 2024-05-25 12:45 PM (Fixing deterministic ID 'get' denied and merging logic)
 service cloud.firestore {
   match /databases/{database}/documents {
 
     // Helper functions
     function isSignedIn() {
       return request.auth != null;
-    }
-
-    // Check if the current user is a participant based on ID or data
-    function isMember(docId, data) {
-      return isSignedIn() && (
-        (docId.indexOf(request.auth.uid) > -1) || 
-        (data != null && data.participantUids != null && request.auth.uid in data.participantUids)
-      );
     }
 
     // Users can read any profile, but only write their own.
@@ -33,11 +25,14 @@ service cloud.firestore {
 
     // Conversations logic
     match /conversations/{conversationId} {
-      // Allow 'get' if the user is part of the ID or the data. 
-      // This is crucial for checking existence before creation.
-      allow get: if isMember(conversationId, resource.data);
+      // Allow 'get' if the user's UID is in the document ID (deterministic format)
+      // OR if the user is a participant in an existing document.
+      allow get: if isSignedIn() && (
+        (conversationId.indexOf(request.auth.uid) > -1) || 
+        (resource != null && request.auth.uid in resource.data.participantUids)
+      );
       
-      // Standard reads for existing members
+      // Standard listing of chats you belong to
       allow list: if isSignedIn() && resource.data.participantUids != null && request.auth.uid in resource.data.participantUids;
 
       // Allow creation if the user is in the new participant list
