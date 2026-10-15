@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, Suspense, useCallback } from 'react';
@@ -18,7 +19,6 @@ import {
   updateDoc,
   doc,
   getDoc,
-  setDoc,
   serverTimestamp,
   Timestamp,
   writeBatch,
@@ -125,9 +125,6 @@ function ChatPageContent() {
         const existing = uniqueConvosMap.get(otherUid);
         const sortedPair = [...convo.participantUids].sort().join('_');
         
-        // Prioritization logic:
-        // 1. Prefer deterministic IDs (uid1_uid2)
-        // 2. If both are the same type, prefer the one with the most recent update
         const isDeterministicId = convo.id === sortedPair;
         
         if (!existing) {
@@ -179,7 +176,6 @@ function ChatPageContent() {
         const conversationDocRef = doc(db, "conversations", conversationId);
         
         try {
-            // Check for existing deterministic chat
             const docSnap = await getDoc(conversationDocRef).catch(async (error) => {
               if (error.code === 'permission-denied') {
                   const permissionError = new FirestorePermissionError({
@@ -190,10 +186,6 @@ function ChatPageContent() {
               }
               throw error;
             });
-            
-            if (!docSnap.exists()) {
-                // We'll create it only when the first message is sent
-            }
 
             const newParams = new URLSearchParams(searchParams.toString());
             newParams.delete('newChatWith');
@@ -201,7 +193,7 @@ function ChatPageContent() {
             newParams.set('chatId', conversationId);
             router.replace(`${pathname}?${newParams.toString()}`);
         } catch (error) {
-            console.error("Error in findOrCreateChat:", error);
+            // Error handled by catch or listener
         }
     };
     
@@ -286,7 +278,6 @@ function ChatPageContent() {
     if (!currentUser?.uid || !selectedChatId) return;
 
     const currentConvo = conversations.find(c => c.id === selectedChatId);
-    
     const receiverUid = currentConvo 
       ? currentConvo.participantUids.find(uid => uid !== currentUser.uid)
       : selectedChatId.indexOf('_') !== -1 ? selectedChatId.split('_').find(uid => uid !== currentUser.uid) : null;
