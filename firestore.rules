@@ -1,7 +1,7 @@
 
 rules_version = '2';
 
-// Last updated: 2024-05-24 10:30 AM (Robust Write Access & Existence Checks)
+// Last updated: 2024-05-24 03:30 PM (Fixed invalid .split() and optimized membership)
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -11,12 +11,8 @@ service cloud.firestore {
     }
 
     // Check if the current user is a participant in the conversation
-    // We check the ID for deterministic chats and the participantUids array for all chats.
-    function isMember(data, convoId) {
-      return isSignedIn() && (
-        (convoId.indexOf(request.auth.uid) != -1) ||
-        (data != null && data.participantUids != null && request.auth.uid in data.participantUids)
-      );
+    function isMember(data) {
+      return isSignedIn() && data != null && data.participantUids != null && request.auth.uid in data.participantUids;
     }
 
     // Users can read any profile, but only write their own.
@@ -34,18 +30,11 @@ service cloud.firestore {
 
     // Conversations logic
     match /conversations/{conversationId} {
-      
-      // Allow get/list if user is a member
-      allow get: if isMember(resource.data, conversationId);
-      allow list: if isSignedIn() && resource.data.participantUids != null && request.auth.uid in resource.data.participantUids;
+      // Allow read/update/delete if user is already a member
+      allow read, update, delete: if isMember(resource.data);
 
       // Allow creation if the user is in the new participant list
-      allow create: if isMember(request.resource.data, conversationId);
-      
-      // Allow update if the user is a member of the existing OR the updated document
-      allow update: if isMember(resource.data, conversationId) || isMember(request.resource.data, conversationId);
-      
-      allow delete: if isMember(resource.data, conversationId);
+      allow create: if isMember(request.resource.data);
 
       // Messages subcollection
       match /messages/{messageId} {
