@@ -124,17 +124,20 @@ function ChatPageContent() {
 
         const existing = uniqueConvosMap.get(otherUid);
         const sortedPair = [...convo.participantUids].sort().join('_');
-        
         const isDeterministicId = convo.id === sortedPair;
         
         if (!existing) {
           uniqueConvosMap.set(otherUid, convo);
         } else {
+          // If we find a duplicate, prefer the one with the deterministic ID (uid1_uid2)
+          // or the one with the most recent activity.
           const existingIsDeterministic = existing.id === sortedPair;
           if (isDeterministicId && !existingIsDeterministic) {
             uniqueConvosMap.set(otherUid, convo);
           } else if (isDeterministicId === existingIsDeterministic) {
-            if (new Date(convo.updatedAt as string) > new Date(existing.updatedAt as string)) {
+            const convoDate = new Date(convo.updatedAt as string).getTime();
+            const existingDate = new Date(existing.updatedAt as string).getTime();
+            if (convoDate > existingDate) {
               uniqueConvosMap.set(otherUid, convo);
             }
           }
@@ -176,7 +179,7 @@ function ChatPageContent() {
         const conversationDocRef = doc(db, "conversations", conversationId);
         
         try {
-            const docSnap = await getDoc(conversationDocRef).catch(async (error) => {
+            await getDoc(conversationDocRef).catch(async (error) => {
               if (error.code === 'permission-denied') {
                   const permissionError = new FirestorePermissionError({
                       path: conversationDocRef.path,
@@ -193,7 +196,7 @@ function ChatPageContent() {
             newParams.set('chatId', conversationId);
             router.replace(`${pathname}?${newParams.toString()}`);
         } catch (error) {
-            // Error handled by catch or listener
+            // Error handled by listener
         }
     };
     
