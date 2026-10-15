@@ -1,7 +1,7 @@
 
 rules_version = '2';
 
-// Last Sync: 2024-05-25 03:30 PM (Definitive fix for deterministic ID 'get' and merging logic)
+// Last Sync: 2024-05-25 04:30 PM (Definitive fix for deterministic ID 'get' denied and merging logic)
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -27,10 +27,11 @@ service cloud.firestore {
     match /conversations/{conversationId} {
       // Allow 'get' if the user's UID is in the document ID (deterministic format)
       // OR if the user is a participant in an existing document.
-      // Using matches for high reliability on path variables.
+      // We also allow 'get' on a non-existent document (resource == null) so the client can check for availability.
       allow get: if isSignedIn() && (
-        (conversationId.matches('.*' + request.auth.uid + '.*')) || 
-        (resource != null && request.auth.uid in resource.data.participantUids)
+        (resource == null) ||
+        (request.auth.uid in conversationId.split('_')) || 
+        (resource.data.participantUids != null && request.auth.uid in resource.data.participantUids)
       );
       
       // Standard listing of chats you belong to

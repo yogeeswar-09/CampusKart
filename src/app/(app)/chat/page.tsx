@@ -177,7 +177,7 @@ function ChatPageContent() {
         const conversationDocRef = doc(db, "conversations", conversationId);
         
         try {
-            await getDoc(conversationDocRef).catch(async (error) => {
+            const convoSnap = await getDoc(conversationDocRef).catch(async (error) => {
               if (error.code === 'permission-denied') {
                   const permissionError = new FirestorePermissionError({
                       path: conversationDocRef.path,
