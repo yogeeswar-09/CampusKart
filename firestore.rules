@@ -1,7 +1,7 @@
 
 rules_version = '2';
 
-// Last Sync: 2024-05-25 12:45 PM (Fixing deterministic ID 'get' denied and merging logic)
+// Last Sync: 2024-05-25 03:30 PM (Definitive fix for deterministic ID 'get' and merging logic)
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -19,7 +19,7 @@ service cloud.firestore {
     // Listings are public to read, but only owners can create/update.
     match /listings/{listingId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && request.auth.uid == request.resource.data.sellerId;
+      allow create: if isSignedIn() && request.resource.data.sellerId == request.auth.uid;
       allow update, delete: if isSignedIn() && request.auth.uid == resource.data.sellerId;
     }
 
@@ -27,8 +27,9 @@ service cloud.firestore {
     match /conversations/{conversationId} {
       // Allow 'get' if the user's UID is in the document ID (deterministic format)
       // OR if the user is a participant in an existing document.
+      // Using matches for high reliability on path variables.
       allow get: if isSignedIn() && (
-        (conversationId.indexOf(request.auth.uid) > -1) || 
+        (conversationId.matches('.*' + request.auth.uid + '.*')) || 
         (resource != null && request.auth.uid in resource.data.participantUids)
       );
       

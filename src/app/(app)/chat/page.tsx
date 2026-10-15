@@ -114,8 +114,7 @@ function ChatPageContent() {
 
       const resolvedConvos = await Promise.all(convosPromises);
       
-      // Deduplicate conversations: If we have multiple chats with the same person, 
-      // prioritize the one with a deterministic ID (uid1_uid2).
+      // Deduplicate conversations: prioritize deterministic IDs and latest activity
       const uniqueConvosMap = new Map<string, ChatConversation>();
       resolvedConvos.forEach(convo => {
         if (!convo.participantUids || convo.participantUids.length < 2) return;
@@ -130,8 +129,6 @@ function ChatPageContent() {
         if (!existing) {
           uniqueConvosMap.set(otherUid, convo);
         } else {
-          // If this one is deterministic and the existing one isn't, replace it.
-          // Or if both are deterministic/non-deterministic, take the most recent.
           const existingIsDeterministic = existing.id === sortedPair;
           if (isDeterministicId && !existingIsDeterministic) {
             uniqueConvosMap.set(otherUid, convo);
@@ -175,13 +172,11 @@ function ChatPageContent() {
             return;
         }
         
-        // Generate a deterministic ID by sorting UIDs
         const sortedUids = [currentUser.uid, newChatWithUserId].sort();
         const conversationId = sortedUids.join('_');
         const conversationDocRef = doc(db, "conversations", conversationId);
         
         try {
-            // Check for existence.
             await getDoc(conversationDocRef).catch(async (error) => {
               if (error.code === 'permission-denied') {
                   const permissionError = new FirestorePermissionError({
