@@ -1,7 +1,7 @@
 
 rules_version = '2';
 
-// Last Sync: 2024-05-25 08:30 PM (Fix for new account 'get denied' and batch creation)
+// Last Sync: 2024-05-25 10:30 PM (Comprehensive fix for new user 'get' denied and batch write support)
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -31,19 +31,21 @@ service cloud.firestore {
       }
 
       // Allow 'get' if:
-      // 1. The user's UID is in the ID string (allows existence check for new chats)
-      // 2. OR the document doesn't exist yet (resource == null)
-      // 3. OR the user is a participant in the existing data
+      // 1. The document doesn't exist yet (resource == null) - allows existence checks
+      // 2. The user's UID is in the ID string (deterministic format UID1_UID2)
+      // 3. The user is a participant in the existing data
       allow get: if isSignedIn() && (
-        (conversationId.matches('.*' + request.auth.uid + '.*')) ||
         (resource == null) ||
+        (conversationId.matches('.*' + request.auth.uid + '.*')) ||
         isMember(resource.data)
       );
       
       allow list: if isSignedIn() && isMember(resource.data);
 
+      // Allow creation if the user is one of the participants
       allow create: if isSignedIn() && isMember(request.resource.data);
 
+      // Allow updates if the user is a member of the current or new state
       allow update: if isSignedIn() && (
         isMember(resource.data) || 
         isMember(request.resource.data)
@@ -53,7 +55,6 @@ service cloud.firestore {
 
       // Messages subcollection
       match /messages/{messageId} {
-        // Membership check for messages
         // We use getAfter for 'create' to support batches that create the parent conversation
         function canAccessParent() {
           let convo = get(/databases/$(database)/documents/conversations/$(conversationId));

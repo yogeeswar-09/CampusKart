@@ -114,9 +114,7 @@ function ChatPageContent() {
 
       const resolvedConvos = await Promise.all(convosPromises);
       
-      // DEDUPLICATION LOGIC:
-      // Group conversations by the other participant's UID.
-      // If multiple exist, prioritize the deterministic ID (sortedUids.join('_')) or the latest activity.
+      // Group conversations by the other participant's UID to find duplicates
       const uniqueConvosMap = new Map<string, ChatConversation>();
       resolvedConvos.forEach(convo => {
         if (!convo.participantUids || convo.participantUids.length < 2) return;
@@ -131,8 +129,8 @@ function ChatPageContent() {
         if (!existing) {
           uniqueConvosMap.set(otherUid, convo);
         } else {
+          // If we find multiple, prioritize the deterministic ID or the one with the latest update
           const existingIsDeterministic = existing.id === deterministicId;
-          // Priority: 1. Deterministic ID, 2. Latest updatedAt
           if (isDeterministic && !existingIsDeterministic) {
             uniqueConvosMap.set(otherUid, convo);
           } else if (isDeterministic === existingIsDeterministic) {
@@ -189,11 +187,10 @@ function ChatPageContent() {
             return;
         }
         
-        // 2. If no existing chat found, try the deterministic ID
+        // 2. If no existing chat found, redirect to the deterministic ID
         const sortedUids = [currentUser.uid, newChatWithUserId].sort();
         const conversationId = sortedUids.join('_');
         
-        // We just redirect to the ID. If it doesn't exist, the UI will show empty and the first message will create it.
         const newParams = new URLSearchParams(searchParams.toString());
         newParams.delete('newChatWith');
         newParams.delete('itemId');
@@ -244,6 +241,7 @@ function ChatPageContent() {
       setMessages(msgs);
       setIsLoadingMessages(false);
       
+      // Update unread count when viewing messages
       const currentConvoDetails = conversations.find(c => c.id === selectedChatId);
       if (currentConvoDetails && (currentConvoDetails.unreadCount?.[currentUser.uid] || 0) > 0) {
         const updatedUnreadCount = {
