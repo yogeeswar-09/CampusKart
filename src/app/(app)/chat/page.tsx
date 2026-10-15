@@ -192,9 +192,7 @@ function ChatPageContent() {
             });
             
             if (!docSnap.exists()) {
-                // If it doesn't exist, we'll create it only when the first message is sent
-                // or just navigate to it if it's already in the cache from legacy data.
-                // For now, ensure navigation happens.
+                // We'll create it only when the first message is sent
             }
 
             const newParams = new URLSearchParams(searchParams.toString());
@@ -208,7 +206,7 @@ function ChatPageContent() {
     };
     
     findOrCreateChat();
-  }, [searchParams, currentUser, router, pathname, getCachedUserDetails]);
+  }, [searchParams, currentUser, router, pathname]);
 
   useEffect(() => {
     if (isLoadingConversations || searchParams.has('newChatWith')) return;
@@ -289,10 +287,9 @@ function ChatPageContent() {
 
     const currentConvo = conversations.find(c => c.id === selectedChatId);
     
-    // Fallback for starting a chat that isn't yet in the list
     const receiverUid = currentConvo 
       ? currentConvo.participantUids.find(uid => uid !== currentUser.uid)
-      : selectedChatId.split('_').find(uid => uid !== currentUser.uid);
+      : selectedChatId.indexOf('_') !== -1 ? selectedChatId.split('_').find(uid => uid !== currentUser.uid) : null;
 
     if (!receiverUid) return;
     

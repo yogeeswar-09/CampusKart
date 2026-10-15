@@ -1,5 +1,6 @@
 rules_version = '2';
 
+// Last updated: 2024-05-22 10:45 AM (Force Sync)
 service cloud.firestore {
   match /databases/{database}/documents {
 
