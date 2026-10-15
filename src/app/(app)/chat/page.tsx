@@ -164,7 +164,7 @@ function ChatPageContent() {
 
   useEffect(() => {
     const newChatWithUserId = searchParams.get('newChatWith');
-    if (!newChatWithUserId || !currentUser?.uid) return;
+    if (!newChatWithUserId || !currentUser?.uid || isLoadingConversations) return;
 
     const findOrCreateChat = async () => {
         if (newChatWithUserId === currentUser.uid) {
@@ -172,6 +172,22 @@ function ChatPageContent() {
             return;
         }
         
+        // 1. Check if we already have a conversation with this user in our loaded list
+        // This handles cases where a legacy chat already exists.
+        const existingConvo = conversations.find(c => 
+            c.participantUids.includes(newChatWithUserId)
+        );
+
+        if (existingConvo) {
+            const newParams = new URLSearchParams(searchParams.toString());
+            newParams.delete('newChatWith');
+            newParams.delete('itemId');
+            newParams.set('chatId', existingConvo.id);
+            router.replace(`${pathname}?${newParams.toString()}`);
+            return;
+        }
+        
+        // 2. If not found in loaded list, try to see if the deterministic ID exists
         const sortedUids = [currentUser.uid, newChatWithUserId].sort();
         const conversationId = sortedUids.join('_');
         const conversationDocRef = doc(db, "conversations", conversationId);
@@ -199,7 +215,7 @@ function ChatPageContent() {
     };
     
     findOrCreateChat();
-  }, [searchParams, currentUser, router, pathname]);
+  }, [searchParams, currentUser, router, pathname, isLoadingConversations, conversations]);
 
   useEffect(() => {
     if (isLoadingConversations || searchParams.has('newChatWith')) return;
