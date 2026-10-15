@@ -129,8 +129,7 @@ function ChatPageContent() {
         if (!existing) {
           uniqueConvosMap.set(otherUid, convo);
         } else {
-          // If we find a duplicate, prefer the one with the deterministic ID (uid1_uid2)
-          // or the one with the most recent activity.
+          // Prefer deterministic ID (uid1_uid2) or more recent activity
           const existingIsDeterministic = existing.id === sortedPair;
           if (isDeterministicId && !existingIsDeterministic) {
             uniqueConvosMap.set(otherUid, convo);
@@ -242,14 +241,17 @@ function ChatPageContent() {
       
       const currentConvoDetails = conversations.find(c => c.id === selectedChatId);
       if (currentConvoDetails && (currentConvoDetails.unreadCount?.[currentUser.uid] || 0) > 0) {
-        const updateData = { [`unreadCount.${currentUser.uid}`]: 0 };
-        updateDoc(doc(db, "conversations", selectedChatId), updateData)
+        const unreadCountUpdate = {
+          ...currentConvoDetails.unreadCount,
+          [currentUser.uid]: 0
+        };
+        updateDoc(doc(db, "conversations", selectedChatId), { unreadCount: unreadCountUpdate })
           .catch(async (error: any) => {
             if (error.code === 'permission-denied') {
               const permissionError = new FirestorePermissionError({
                 path: `conversations/${selectedChatId}`,
                 operation: 'update',
-                requestResourceData: updateData,
+                requestResourceData: { unreadCount: unreadCountUpdate },
               });
               errorEmitter.emit('permission-error', permissionError);
             }
@@ -308,8 +310,11 @@ function ChatPageContent() {
         timestamp: serverTimestamp(),
       },
       updatedAt: serverTimestamp(),
-      [`unreadCount.${receiverUid}`]: currentUnreadCount + 1,
-      [`unreadCount.${currentUser.uid}`]: 0,
+      unreadCount: {
+        ...(currentConvo?.unreadCount || {}),
+        [receiverUid]: currentUnreadCount + 1,
+        [currentUser.uid]: 0,
+      }
     };
 
     const batch = writeBatch(db);

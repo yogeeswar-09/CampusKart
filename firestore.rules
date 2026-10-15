@@ -1,7 +1,7 @@
 
 rules_version = '2';
 
-// Last updated: 2024-05-22 04:45 PM (Robust Write Access Fix)
+// Last updated: 2024-05-24 10:30 AM (Robust Write Access & Existence Checks)
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -52,7 +52,7 @@ service cloud.firestore {
         // Membership is determined by the parent conversation document
         function isConvoMember() {
           let convo = get(/databases/$(database)/documents/conversations/$(conversationId));
-          return isSignedIn() && convo.data.participantUids != null && request.auth.uid in convo.data.participantUids;
+          return isSignedIn() && convo != null && convo.data.participantUids != null && request.auth.uid in convo.data.participantUids;
         }
         
         allow read: if isConvoMember();
