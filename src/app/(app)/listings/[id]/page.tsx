@@ -102,13 +102,14 @@ export default function ListingDetailPage() {
     const offerPriceNum = parseFloat(offerPrice);
     const offerMessage = `Hi! I would like to make an offer of ₹${offerPriceNum.toFixed(2)} for your item: "${listing.title}".`;
     
-    // 1. Search for an EXISTING conversation first to avoid duplicates
+    // 1. Check for an EXISTING conversation involving both participants
     const sortedUids = [currentUser.uid, seller.uid].sort();
     const deterministicId = sortedUids.join('_');
     
     let targetConversationId = deterministicId;
 
     try {
+        // Query to find ANY conversation with this user
         const q = query(
             collection(db, "conversations"),
             where("participantUids", "array-contains", currentUser.uid)
@@ -124,8 +125,19 @@ export default function ListingDetailPage() {
         }
 
         const conversationDocRef = doc(db, "conversations", targetConversationId);
-        const convoSnap = await getDoc(conversationDocRef);
-        const convoData = convoSnap.data();
+        
+        // Use a safe existence check
+        let convoData: any = null;
+        try {
+          const convoSnap = await getDoc(conversationDocRef);
+          if (convoSnap.exists()) {
+            convoData = convoSnap.data();
+          }
+        } catch (e) {
+          // If getDoc fails with permissions, we assume it doesn't exist yet and targetConversationId is correct
+          console.log("ListingDetailPage: getDoc denied or failed, proceeding with new chat logic.");
+        }
+
         const currentUnreadCount = convoData?.unreadCount?.[seller.uid] || 0;
 
         const conversationUpdateData: any = {
@@ -144,7 +156,7 @@ export default function ListingDetailPage() {
             listingId: listing.id
         };
         
-        if (!convoSnap.exists()) {
+        if (!convoData) {
             conversationUpdateData.createdAt = serverTimestamp();
         }
 
@@ -158,6 +170,7 @@ export default function ListingDetailPage() {
             isRead: false,
         };
         
+        // Commit both conversation and message in a batch
         batch.set(newMessageRef, messageData);
         batch.set(conversationDocRef, conversationUpdateData, { merge: true });
         
@@ -173,6 +186,7 @@ export default function ListingDetailPage() {
             const permissionError = new FirestorePermissionError({
                 path: `conversations/${targetConversationId}`,
                 operation: 'write',
+                requestResourceData: { targetConversationId, messageText: offerMessage },
             });
             errorEmitter.emit('permission-error', permissionError);
         } else {

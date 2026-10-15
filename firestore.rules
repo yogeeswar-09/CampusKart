@@ -1,7 +1,7 @@
 
 rules_version = '2';
 
-// Last Sync: 2024-05-25 06:15 PM (Definitive fix for deterministic ID 'get' denied and merging logic)
+// Last Sync: 2024-05-25 08:30 PM (Fix for new account 'get denied' and batch creation)
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -25,37 +25,48 @@ service cloud.firestore {
 
     // Conversations logic
     match /conversations/{conversationId} {
+      // Helper to check membership
+      function isMember(data) {
+        return data != null && data.participantUids != null && request.auth.uid in data.participantUids;
+      }
+
       // Allow 'get' if:
-      // 1. The document doesn't exist (client checking for existence)
-      // 2. OR the user's UID is in the document data array
-      // 3. OR the user's UID is part of the document ID string (deterministic check)
+      // 1. The user's UID is in the ID string (allows existence check for new chats)
+      // 2. OR the document doesn't exist yet (resource == null)
+      // 3. OR the user is a participant in the existing data
       allow get: if isSignedIn() && (
-        (resource == null) || 
-        (request.auth.uid in resource.data.participantUids) ||
-        (conversationId.matches('.*' + request.auth.uid + '.*'))
+        (conversationId.matches('.*' + request.auth.uid + '.*')) ||
+        (resource == null) ||
+        isMember(resource.data)
       );
       
-      // Standard listing of chats you belong to
-      allow list: if isSignedIn() && resource.data.participantUids != null && request.auth.uid in resource.data.participantUids;
+      allow list: if isSignedIn() && isMember(resource.data);
 
-      // Allow creation if the user is in the new participant list
-      allow create: if isSignedIn() && request.resource.data.participantUids != null && request.auth.uid in request.resource.data.participantUids;
+      allow create: if isSignedIn() && isMember(request.resource.data);
 
-      // Allow updates if the user is currently a member
-      allow update: if isSignedIn() && resource.data.participantUids != null && request.auth.uid in resource.data.participantUids;
+      allow update: if isSignedIn() && (
+        isMember(resource.data) || 
+        isMember(request.resource.data)
+      );
       
-      allow delete: if isSignedIn() && resource.data.participantUids != null && request.auth.uid in resource.data.participantUids;
+      allow delete: if isSignedIn() && isMember(resource.data);
 
       // Messages subcollection
       match /messages/{messageId} {
-        // Membership is determined by the parent conversation document
-        function isConvoMember() {
+        // Membership check for messages
+        // We use getAfter for 'create' to support batches that create the parent conversation
+        function canAccessParent() {
           let convo = get(/databases/$(database)/documents/conversations/$(conversationId));
-          return isSignedIn() && convo != null && convo.data.participantUids != null && request.auth.uid in convo.data.participantUids;
+          return convo != null && isMember(convo.data);
+        }
+
+        function canAccessParentAfter() {
+          let convo = getAfter(/databases/$(database)/documents/conversations/$(conversationId));
+          return convo != null && isMember(convo.data);
         }
         
-        allow read: if isConvoMember();
-        allow create: if isConvoMember() && request.resource.data.senderId == request.auth.uid;
+        allow read: if isSignedIn() && canAccessParent();
+        allow create: if isSignedIn() && canAccessParentAfter() && request.resource.data.senderId == request.auth.uid;
       }
     }
   }
