@@ -114,7 +114,6 @@ function ChatPageContent() {
 
       const resolvedConvos = await Promise.all(convosPromises);
       
-      // Deduplicate conversations by participants to fix "multiple chats" issue
       const uniqueConvosMap = new Map<string, ChatConversation>();
       resolvedConvos.forEach(convo => {
         if (!convo.participantUids || convo.participantUids.length < 2) return;
@@ -129,7 +128,6 @@ function ChatPageContent() {
         if (!existing) {
           uniqueConvosMap.set(otherUid, convo);
         } else {
-          // Prefer deterministic ID (uid1_uid2) or more recent activity
           const existingIsDeterministic = existing.id === sortedPair;
           if (isDeterministicId && !existingIsDeterministic) {
             uniqueConvosMap.set(otherUid, convo);
@@ -195,7 +193,7 @@ function ChatPageContent() {
             newParams.set('chatId', conversationId);
             router.replace(`${pathname}?${newParams.toString()}`);
         } catch (error) {
-            // Error handled by listener
+            // Handled by listener
         }
     };
     
